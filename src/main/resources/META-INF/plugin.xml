@@ -1,0 +1,19 @@
+<idea-plugin>
+  <id>com.khalibre.terminal-link2command</id>
+  <name>Terminal Link to Command</name>
+  <version>1.0.0</version>
+  <vendor>Khalibre</vendor>
+
+  <description>
+    Makes [run: command] in the terminal output clickable.
+    Clicking a [run: command] link runs `command` in the active terminal.
+  </description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>org.jetbrains.plugins.terminal</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <consoleFilterProvider
+      implementation="com.khalibre.link2command.TerminalFilterProvider"/>
+  </extensions>
+</idea-plugin>
