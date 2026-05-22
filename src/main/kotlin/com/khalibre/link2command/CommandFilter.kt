@@ -51,11 +51,17 @@ class RunCommandHyperlinkInfo(
 
             toolWindow.activate {
                 val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
-                val tabs = tabsManager.tabs
-                if (tabs.isEmpty()) return@activate
 
-                // Use the last focused tab (first in list is most recent)
-                val view = tabs.first().view
+                // Get currently selected content/tab
+                val selectedContent = toolWindow.contentManager.selectedContent
+                    ?: return@activate
+
+                // Find matching terminal tab
+                val tabInfo = tabsManager.tabs.firstOrNull {
+                    it.content == selectedContent
+                } ?: return@activate
+
+                val view = tabInfo.view
 
                 // Build and send the command with execute (adds Enter)
                 // Focus the terminal component — this brings it to front and scrolls to bottom
