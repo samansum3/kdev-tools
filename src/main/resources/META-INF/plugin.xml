@@ -1,19 +1,31 @@
 <idea-plugin>
   <id>com.khalibre.terminal-link2command</id>
-  <name>Terminal Link to Command</name>
-  <version>1.0.0</version>
+  <name>Dev Panel</name>
+  <version>1.1.0</version>
   <vendor>Khalibre</vendor>
 
   <description>
-    Makes [run: command] in the terminal output clickable.
-    Clicking a [run: command] link runs `command` in the active terminal.
+    Dev Panel — PR tools, Jira ticket management, and shared dev config.
+    Also makes [r: command] links in terminal output clickable.
   </description>
 
   <depends>com.intellij.modules.platform</depends>
   <depends>org.jetbrains.plugins.terminal</depends>
 
   <extensions defaultExtensionNs="com.intellij">
+
+    <!-- Existing terminal link feature -->
     <consoleFilterProvider
       implementation="com.khalibre.link2command.TerminalFilterProvider"/>
+
+    <!-- New Dev Panel tool window -->
+    <toolWindow
+      id="Dev Panel"
+      anchor="right"
+      secondary="false"
+      canCloseContents="false"
+      factoryClass="com.khalibre.link2command.devpanel.DevPanelFactory"
+      icon="/icons/khalibre-logo.png"/>
+
   </extensions>
 </idea-plugin>

@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.khalibre"
-version = "1.0.0"
+version = "1.1.0"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -24,6 +24,9 @@ dependencies {
         webstorm("2025.3")
         bundledPlugin("org.jetbrains.plugins.terminal")
     }
+
+    // JSON parsing for gh CLI output and Jira REST responses
+    implementation("com.google.code.gson:gson:2.10.1")
 }
 
 intellijPlatform {
