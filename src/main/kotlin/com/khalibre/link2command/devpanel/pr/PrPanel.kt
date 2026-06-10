@@ -410,14 +410,25 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             insets = Insets(0, 0, 2, 0)
         }
 
-        val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+        val titlePanel = JPanel(GridBagLayout()).apply {
             isOpaque = false
+            val g = GridBagConstraints()
+
+            // PR number — fixed width
+            g.gridx = 0; g.gridy = 0; g.weightx = 0.0; g.fill = GridBagConstraints.NONE
+            g.insets = Insets(0, 0, 0, 4)
             add(JBLabel("#${pr.number}").apply {
                 font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1)
                 foreground = Color(24, 95, 165)
-            })
-            add(Box.createHorizontalStrut(4))
-            add(JBLabel("<html><b>${escHtml(pr.title)}</b></html>"))
+            }, g)
+
+            // Title — takes remaining width and truncates
+            g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL
+            g.insets = Insets(0, 0, 0, 0)
+            add(JBLabel(pr.title).apply {
+                font = font.deriveFont(Font.BOLD)
+                minimumSize = Dimension(0, preferredSize.height)
+            }, g)
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
 
