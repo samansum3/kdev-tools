@@ -107,6 +107,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         leftCell(1, fieldLabel("Base branch"))
         rightCell(1, fieldLabel("Stack remote"))
         leftCell(2, baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+        com.intellij.ui.ComboboxSpeedSearch.installOn(baseBranchCombo)
         rightCell(2, stackRemoteCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
 
         fullRow(3, fieldLabel("Default reviewers"))
