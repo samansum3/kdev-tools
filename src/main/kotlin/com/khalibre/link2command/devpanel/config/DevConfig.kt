@@ -2,8 +2,6 @@ package com.khalibre.link2command.devpanel.config
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import java.io.File
 
 data class GitConfig(
@@ -25,7 +23,8 @@ data class DevConfig(
     val jira: JiraConfig = JiraConfig()
 ) {
     companion object {
-        private val CONFIG_FILE = File(System.getProperty("user.home"), ".config/devtools/config.json")
+        private val CONFIG_FILE =
+            File(System.getProperty("user.home"), ".config/devtools/config.json")
         private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
 
         fun load(): DevConfig {

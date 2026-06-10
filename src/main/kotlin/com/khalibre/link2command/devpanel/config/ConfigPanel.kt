@@ -38,7 +38,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun loadUpstreamBranches() {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val branches = GitService.fetchUpstreamBranchNames()
+            val branches = GitService.fetchUpstreamBranchNames(project)
             SwingUtilities.invokeLater {
                 val current = baseBranchCombo.selectedItem?.toString()
                 baseBranchCombo.removeAllItems()

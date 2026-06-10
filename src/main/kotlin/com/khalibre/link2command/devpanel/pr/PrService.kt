@@ -89,7 +89,7 @@ object PrService {
     }
 
     /** Fetch open PRs (non-draft) for an optional base branch */
-    fun fetchPrs(repo: String, baseBranch: String?): List<PullRequest> {
+    fun fetchPrs(repo: String, baseBranch: String?, author: String?): List<PullRequest> {
         val args = mutableListOf(
             "gh", "pr", "list",
             "--repo", repo,
@@ -97,9 +97,8 @@ object PrService {
             "--json", "number,title,author,labels,updatedAt,reviewDecision,url,headRefName,baseRefName,isDraft,reviews",
             "--limit", "100"
         )
-        if (!baseBranch.isNullOrBlank()) {
-            args += listOf("--base", baseBranch)
-        }
+        if (!baseBranch.isNullOrBlank()) args += listOf("--base", baseBranch)
+        if (!author.isNullOrBlank()) args += listOf("--author", author)
         val result = runCmd(args)
         if (result.exitCode != 0) throw RuntimeException("gh pr list failed: ${result.stderr}")
 
