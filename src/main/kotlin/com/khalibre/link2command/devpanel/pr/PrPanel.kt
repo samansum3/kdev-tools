@@ -311,8 +311,8 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 add(makeBadge("⚠ conflict", null))
             }
 
-            pr.labels.forEach { (name, _) ->
-                add(makeLabelBadge(name))
+            pr.labels.forEach { (name, color) ->
+                add(makeLabelBadge(name, color))
             }
         }
 
@@ -409,11 +409,20 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    private fun makeLabelBadge(name: String): JLabel {
+    private fun makeLabelBadge(name: String, hexColor: String): JLabel {
+        val bg = try {
+            Color(Integer.parseInt(hexColor, 16))
+        } catch (e: Exception) {
+            Color(0x8B949E)
+        }
+        // pick white or black text based on luminance
+        val luminance = (0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue) / 255
+        val fg = if (luminance > 0.5) Color(0x1F2328) else Color.WHITE
+
         return JLabel(name).apply {
             isOpaque = true
-            background = Color(230, 241, 251)
-            foreground = Color(24, 95, 165)
+            background = bg
+            foreground = fg
             font = Font(Font.MONOSPACED, Font.PLAIN, font.size - 2)
             border = JBUI.Borders.empty(2, 6)
         }
