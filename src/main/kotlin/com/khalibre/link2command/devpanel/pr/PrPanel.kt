@@ -17,6 +17,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val baseBranchCombo = JComboBox<String>()
     private val authorCombo = JComboBox<String>()
+    private val avatarCache = mutableMapOf<String, ImageIcon?>()
     private val cardsPanel = JPanel()
     private val statusLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
@@ -77,10 +78,10 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             addActionListener(authorListener)
         }
 
+        com.intellij.ui.ComboboxSpeedSearch.installOn(authorCombo)
+
         // Render Github profile avatar
         authorCombo.renderer = object : DefaultListCellRenderer() {
-            private val avatarCache = mutableMapOf<String, ImageIcon?>()
-
             override fun getListCellRendererComponent(
                 list: JList<*>, value: Any?, index: Int,
                 isSelected: Boolean, cellHasFocus: Boolean
