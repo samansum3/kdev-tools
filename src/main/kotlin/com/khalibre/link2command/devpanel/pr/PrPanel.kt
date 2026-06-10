@@ -77,6 +77,66 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             addActionListener(authorListener)
         }
 
+        // Render Github profile avatar
+        authorCombo.renderer = object : DefaultListCellRenderer() {
+            private val avatarCache = mutableMapOf<String, ImageIcon?>()
+
+            override fun getListCellRendererComponent(
+                list: JList<*>, value: Any?, index: Int,
+                isSelected: Boolean, cellHasFocus: Boolean
+            ): Component {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                val login = value?.toString() ?: return this
+
+                if (login == "— none —") {
+                    icon = null
+                    border = JBUI.Borders.empty(4, 6)
+                    return this
+                }
+
+                // separator line: after "— none —" (index 1), and after current user (index 2 if ghUser exists)
+                border = if (index > 0 && (index == 1 || (index == 2 && ghUser != null)))
+                    BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(1, 0, 0, 0, JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
+                        JBUI.Borders.empty(4, 6)
+                    )
+                else JBUI.Borders.empty(4, 6)
+
+                // circular avatar 20px, fetched at 32px to avoid pixelation
+                when {
+                    avatarCache.containsKey(login) -> icon = avatarCache[login]
+                    else -> {
+                        icon = null
+                        avatarCache[login] = null
+                        ApplicationManager.getApplication().executeOnPooledThread {
+                            val img = try {
+                                val raw = javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
+                                if (raw != null) {
+                                    val size = 16
+                                    val circle = java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+                                    val g = circle.createGraphics()
+                                    g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+                                    g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                                    g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+                                    // draw circle mask
+                                    g.fillOval(0, 0, size, size)
+                                    // switch to SRC_IN so image is clipped to the circle shape with smooth edges
+                                    g.composite = java.awt.AlphaComposite.SrcIn
+                                    g.drawImage(raw.getScaledInstance(size, size, java.awt.Image.SCALE_SMOOTH), 0, 0, null)
+                                    g.dispose()
+                                    ImageIcon(circle)
+                                } else null
+                            } catch (e: Exception) { null }
+                            avatarCache[login] = img
+                            SwingUtilities.invokeLater { authorCombo.repaint() }
+                        }
+                    }
+                }
+
+                return this
+            }
+        }
+
         syncButton.addActionListener { fetchUpstreamAndReload() }
         authorSyncButton.addActionListener { syncAuthors() }
 
@@ -177,9 +237,15 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun populateAuthorCombo(authors: List<AuthorCache.CachedAuthor>) {
         authorCombo.removeActionListener(authorListener)
         val previousSelection = authorCombo.selectedItem?.toString()
+
         authorCombo.removeAllItems()
         authorCombo.addItem("— none —")
-        authors.forEach { authorCombo.addItem(it.login) }
+
+        // pin current user first if they're in the list
+        val currentUser = ghUser ?: PrService.currentGhUser().also { ghUser = it }
+        val sorted = authors.sortedWith(compareByDescending { it.login == currentUser })
+        sorted.forEach { authorCombo.addItem(it.login) }
+
         val idx = (0 until authorCombo.itemCount)
             .firstOrNull { authorCombo.getItemAt(it) == previousSelection }
         authorCombo.selectedIndex = idx ?: 0
