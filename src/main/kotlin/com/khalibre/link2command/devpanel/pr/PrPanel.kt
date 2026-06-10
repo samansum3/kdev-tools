@@ -97,7 +97,13 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 // separator line: after "— none —" (index 1), and after current user (index 2 if ghUser exists)
                 border = if (index > 0 && (index == 1 || (index == 2 && ghUser != null)))
                     BorderFactory.createCompoundBorder(
-                        BorderFactory.createMatteBorder(1, 0, 0, 0, JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
+                        BorderFactory.createMatteBorder(
+                            1,
+                            0,
+                            0,
+                            0,
+                            JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                        ),
                         JBUI.Borders.empty(4, 6)
                     )
                 else JBUI.Borders.empty(4, 6)
@@ -110,23 +116,45 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                         avatarCache[login] = null
                         ApplicationManager.getApplication().executeOnPooledThread {
                             val img = try {
-                                val raw = javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
+                                val raw =
+                                    javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
                                 if (raw != null) {
                                     val size = 16
-                                    val circle = java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+                                    val circle = java.awt.image.BufferedImage(
+                                        size,
+                                        size,
+                                        java.awt.image.BufferedImage.TYPE_INT_ARGB
+                                    )
                                     val g = circle.createGraphics()
-                                    g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-                                    g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-                                    g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+                                    g.setRenderingHint(
+                                        java.awt.RenderingHints.KEY_ANTIALIASING,
+                                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON
+                                    )
+                                    g.setRenderingHint(
+                                        java.awt.RenderingHints.KEY_INTERPOLATION,
+                                        java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                                    )
+                                    g.setRenderingHint(
+                                        java.awt.RenderingHints.KEY_RENDERING,
+                                        java.awt.RenderingHints.VALUE_RENDER_QUALITY
+                                    )
                                     // draw circle mask
                                     g.fillOval(0, 0, size, size)
                                     // switch to SRC_IN so image is clipped to the circle shape with smooth edges
                                     g.composite = java.awt.AlphaComposite.SrcIn
-                                    g.drawImage(raw.getScaledInstance(size, size, java.awt.Image.SCALE_SMOOTH), 0, 0, null)
+                                    g.drawImage(
+                                        raw.getScaledInstance(
+                                            size,
+                                            size,
+                                            java.awt.Image.SCALE_SMOOTH
+                                        ), 0, 0, null
+                                    )
                                     g.dispose()
                                     ImageIcon(circle)
                                 } else null
-                            } catch (e: Exception) { null }
+                            } catch (e: Exception) {
+                                null
+                            }
                             avatarCache[login] = img
                             SwingUtilities.invokeLater { authorCombo.repaint() }
                         }
@@ -202,7 +230,8 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun loadAuthors() {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val repo = upstreamRepo ?: PrService.upstreamRepo(project) ?: return@executeOnPooledThread
+            val repo =
+                upstreamRepo ?: PrService.upstreamRepo(project) ?: return@executeOnPooledThread
             upstreamRepo = repo
             val cached = AuthorCache.load(repo)
             val authors = if (cached.isNotEmpty()) cached
@@ -432,16 +461,35 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
 
-        gbc.gridy =
-            1; card.add(JBLabel("${pr.headRefName} → ${pr.baseRefName}  ·  ${pr.author}  ·  ${pr.timeAgo()}").apply {
-            font = font.deriveFont(font.size - 2f)
-            foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        val isAuthor = pr.author == ghUser
+        val authorColor = if (isAuthor) Color(59, 109, 17) else Color(24, 95, 165)
+        val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
             border = JBUI.Borders.emptyTop(1)
-        }, gbc)
+            add(JBLabel("${pr.headRefName} → ${pr.baseRefName}  ·  ").apply {
+                font = font.deriveFont(font.size - 2f)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            })
+            add(JBLabel(pr.author).apply {
+                font = font.deriveFont(font.size - 2f)
+                foreground = authorColor
+            })
+            add(JBLabel("  ·  ${pr.timeAgo()}").apply {
+                font = font.deriveFont(font.size - 2f)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            })
+        }
+        gbc.gridy = 1; card.add(metaPanel, gbc)
 
         val reviewText = when (pr.reviewState) {
-            ReviewState.APPROVED -> "approved by ${pr.approvedBy.joinToString(", ")}"
-            ReviewState.CHANGES_REQUESTED -> "changes requested"
+            ReviewState.APPROVED -> "✓ approved by ${pr.approvedBy.joinToString(", ")}"
+            ReviewState.CHANGES_REQUESTED -> "changes requested by ${
+                pr.changesRequestedBy.joinToString(
+                    ", "
+                )
+            }"
+
+            ReviewState.COMMENTED -> "commented by ${pr.commentedBy.joinToString(", ")}"
             ReviewState.AWAITING -> "awaiting review"
         }
         val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
@@ -457,9 +505,16 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             isOpaque = false
             border = JBUI.Borders.emptyLeft(-5)
             val isAuthor = pr.author == ghUser
-            if (!isAuthor) add(makeActionButton("approve") { doApprovePr(pr, repo) })
+
+            if (isAuthor) {
+                add(makeActionButton("checkout") { doCheckout(pr, repo) })
+                add(makeActionButton("rebase") { doRebase(pr, repo) })
+                add(makeActionButton("update-pr") { doUpdatePr(pr) })
+            } else {
+                add(makeActionButton("approve") { doApprovePr(pr, repo) })
+                add(makeActionButton("approve + merge") { doMergePr(pr, repo, true) })
+            }
             add(makeActionButton("merge") { doMergePr(pr, repo, false) })
-            if (!isAuthor) add(makeActionButton("approve + merge") { doMergePr(pr, repo, true) })
             add(makeActionButton("view") {
                 try {
                     java.awt.Desktop.getDesktop().browse(java.net.URI(pr.url))
@@ -468,6 +523,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
             })
         }
+
         gbc.gridy = 3; card.add(actionPanel, gbc)
 
         card.addHierarchyListener {
@@ -475,6 +531,39 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
 
         return card
+    }
+
+    private fun doCheckout(pr: PullRequest, repo: String) {
+        setStatus("Checking out ${pr.headRefName}…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = PrService.checkoutBranch(project, pr.headRefName)
+            SwingUtilities.invokeLater {
+                if (result.isSuccess) setStatus("✓ Checked out ${pr.headRefName}")
+                else setStatus("✗ ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    private fun doRebase(pr: PullRequest, repo: String) {
+        setStatus("Rebasing ${pr.headRefName}…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = PrService.rebasePr(project, pr.headRefName)
+            SwingUtilities.invokeLater {
+                if (result.isSuccess) setStatus("✓ Rebased ${pr.headRefName}")
+                else setStatus("✗ ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    private fun doUpdatePr(pr: PullRequest) {
+        setStatus("Running update-pr for #${pr.number}…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = PrService.updatePr(project)
+            SwingUtilities.invokeLater {
+                if (result.isSuccess) setStatus("✓ PR #${pr.number} updated")
+                else setStatus("✗ ${result.exceptionOrNull()?.message}")
+            }
+        }
     }
 
     private fun doApprovePr(pr: PullRequest, repo: String) {
@@ -521,12 +610,14 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         val bg = when (state) {
             ReviewState.APPROVED -> Color(234, 243, 222)
             ReviewState.CHANGES_REQUESTED -> Color(250, 238, 218)
+            ReviewState.COMMENTED -> Color(235, 235, 250)
             ReviewState.AWAITING -> Color(230, 241, 251)
             null -> Color(252, 235, 235)
         }
         val fg = when (state) {
             ReviewState.APPROVED -> Color(59, 109, 17)
             ReviewState.CHANGES_REQUESTED -> Color(133, 79, 11)
+            ReviewState.COMMENTED -> Color(88, 60, 163)
             ReviewState.AWAITING -> Color(24, 95, 165)
             null -> Color(163, 45, 45)
         }

@@ -13,7 +13,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 enum class MergeableState { MERGEABLE, CONFLICTING, UNKNOWN }
-enum class ReviewState { AWAITING, APPROVED, CHANGES_REQUESTED }
+enum class ReviewState { AWAITING, APPROVED, CHANGES_REQUESTED, COMMENTED }
 
 data class PrReview(val author: String, val state: String)
 
@@ -37,6 +37,13 @@ data class PullRequest(
             return latest.filter { it.value == "APPROVED" }.keys.sorted()
         }
 
+    val commentedBy: List<String>
+        get() {
+            val latest = mutableMapOf<String, String>()
+            reviews.forEach { latest[it.author] = it.state }
+            return latest.filter { it.value == "COMMENTED" }.keys.sorted()
+        }
+
     val changesRequestedBy: List<String>
         get() {
             val latest = mutableMapOf<String, String>()
@@ -48,6 +55,7 @@ data class PullRequest(
         get() = when {
             approvedBy.isNotEmpty() && changesRequestedBy.isEmpty() -> ReviewState.APPROVED
             changesRequestedBy.isNotEmpty() -> ReviewState.CHANGES_REQUESTED
+            commentedBy.isNotEmpty() -> ReviewState.COMMENTED
             else -> ReviewState.AWAITING
         }
 
@@ -73,6 +81,27 @@ data class PullRequest(
 object PrService {
     private val gson = Gson()
 
+    fun rebasePr(project: Project, branch: String): Result<String> {
+        val workDir = project.basePath?.let { File(it) }
+        val result = runCmd(listOf("bash", "-c", "rebase $branch"), workDir)
+        return if (result.exitCode == 0) Result.success(result.stdout)
+        else Result.failure(RuntimeException(result.stderr.ifBlank { "Rebase failed" }))
+    }
+
+    fun updatePr(project: Project): Result<String> {
+        val workDir = project.basePath?.let { File(it) }
+        val result = runCmd(listOf("bash", "-c", "update-pr"), workDir)
+        return if (result.exitCode == 0) Result.success(result.stdout)
+        else Result.failure(RuntimeException(result.stderr.ifBlank { "update-pr failed" }))
+    }
+
+    fun checkoutBranch(project: Project, branch: String): Result<String> {
+        val workDir = project.basePath?.let { File(it) }
+        val result = runCmd(listOf("git", "checkout", branch), workDir)
+        return if (result.exitCode == 0) Result.success("Checked out $branch")
+        else Result.failure(RuntimeException(result.stderr.ifBlank { "Checkout failed" }))
+    }
+
     /** Resolves the upstream remote repo slug (e.g. "Khalibre/crosswired-common") */
     fun upstreamRepo(project: Project): String? {
         val gitDir = findGitDir(project) ?: return null
@@ -91,11 +120,17 @@ object PrService {
     /** Fetch open PRs (non-draft) for an optional base branch */
     fun fetchPrs(repo: String, baseBranch: String?, author: String?): List<PullRequest> {
         val args = mutableListOf(
-            "gh", "pr", "list",
-            "--repo", repo,
-            "--state", "open",
-            "--json", "number,title,author,labels,updatedAt,reviewDecision,url,headRefName,baseRefName,isDraft,reviews",
-            "--limit", "100"
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--json",
+            "number,title,author,labels,updatedAt,reviewDecision,url,headRefName,baseRefName,isDraft,reviews",
+            "--limit",
+            "100"
         )
         if (!baseBranch.isNullOrBlank()) args += listOf("--base", baseBranch)
         if (!author.isNullOrBlank()) args += listOf("--author", author)
@@ -111,7 +146,7 @@ object PrService {
     fun fetchMergeableStates(repo: String, numbers: List<Int>): Map<Int, MergeableState> {
         if (numbers.isEmpty()) return emptyMap()
         val threads = numbers.map { num ->
-            val thread = Thread {  }
+            val thread = Thread { }
             Pair(num, thread)
         }
 
@@ -121,7 +156,18 @@ object PrService {
         numbers.forEach { num ->
             Thread {
                 try {
-                    val result = runCmd(listOf("gh", "pr", "view", "$num", "--repo", repo, "--json", "number,mergeable"))
+                    val result = runCmd(
+                        listOf(
+                            "gh",
+                            "pr",
+                            "view",
+                            "$num",
+                            "--repo",
+                            repo,
+                            "--json",
+                            "number,mergeable"
+                        )
+                    )
                     if (result.exitCode == 0) {
                         val obj = JsonParser.parseString(result.stdout).asJsonObject
                         val state = obj.get("mergeable")?.asString ?: "UNKNOWN"
@@ -156,7 +202,8 @@ object PrService {
             val approveResult = approvePr(repo, number)
             if (approveResult.isFailure) return approveResult
         }
-        val result = runCmd(listOf("gh", "pr", "merge", "$number", "--rebase", "--admin", "--repo", repo))
+        val result =
+            runCmd(listOf("gh", "pr", "merge", "$number", "--rebase", "--admin", "--repo", repo))
         return if (result.exitCode == 0) Result.success("PR #$number merged.")
         else Result.failure(RuntimeException(result.stderr.ifBlank { "Merge failed" }))
     }
@@ -165,7 +212,8 @@ object PrService {
     fun openInBrowser(number: Int) {
         // Use Desktop API — reliable cross-platform, no PATH issues
         try {
-            val result = runCmd(listOf("gh", "pr", "view", "$number", "--json", "url", "--jq", ".url"))
+            val result =
+                runCmd(listOf("gh", "pr", "view", "$number", "--json", "url", "--jq", ".url"))
             val url = result.stdout.trim()
             if (url.startsWith("http") && result.exitCode == 0) {
                 Desktop.getDesktop().browse(URI(url))
@@ -175,7 +223,10 @@ object PrService {
             }
         } catch (e: Exception) {
             // last resort: open PR list page
-            try { Desktop.getDesktop().browse(URI("https://github.com")) } catch (_: Exception) {}
+            try {
+                Desktop.getDesktop().browse(URI("https://github.com"))
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -205,7 +256,8 @@ object PrService {
 
             val reviews = obj.getAsJsonArray("reviews")?.mapNotNull {
                 val r = it.asJsonObject
-                val reviewAuthor = r.getAsJsonObject("author")?.get("login")?.asString ?: return@mapNotNull null
+                val reviewAuthor =
+                    r.getAsJsonObject("author")?.get("login")?.asString ?: return@mapNotNull null
                 val state = r.get("state")?.asString ?: return@mapNotNull null
                 PrReview(reviewAuthor, state)
             } ?: emptyList()
