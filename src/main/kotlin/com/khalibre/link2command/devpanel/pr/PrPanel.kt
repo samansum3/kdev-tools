@@ -70,6 +70,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             minimumSize = Dimension(80, 28)
             addActionListener(baseBranchListener)
         }
+        com.intellij.ui.ComboboxSpeedSearch.installOn(baseBranchCombo)
 
         authorCombo.apply {
             addItem("— none —")
@@ -77,7 +78,6 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             maximumSize = Dimension(160, 28)
             addActionListener(authorListener)
         }
-
         com.intellij.ui.ComboboxSpeedSearch.installOn(authorCombo)
 
         // Render Github profile avatar
