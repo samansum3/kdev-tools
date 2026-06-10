@@ -1,10 +1,12 @@
 package com.khalibre.link2command.devpanel.config
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.pr.PrService
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -14,7 +16,8 @@ import javax.swing.*
 
 class ConfigPanel : JPanel(BorderLayout()) {
 
-    private val baseBranchField = JBTextField()
+    // Base branch is now a dropdown (loaded from upstream branches)
+    private val baseBranchCombo = JComboBox<String>()
     private val stackRemoteCombo = JComboBox(arrayOf("origin", "upstream"))
     private val reviewersField = JBTextField()
     private val userSessionField = JBPasswordField()
@@ -33,6 +36,39 @@ class ConfigPanel : JPanel(BorderLayout()) {
         border = JBUI.Borders.empty(10, 12)
         buildUi()
         loadConfig()
+        loadUpstreamBranches()
+    }
+
+    private fun loadUpstreamBranches() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val branches = try {
+                // No project context here; use current working dir
+                val result = PrService.runCmd(listOf("bash", "-c", "git branch -r | grep '^  upstream/'"))
+                if (result.exitCode != 0) emptyList()
+                else result.stdout.lines()
+                    .map { it.trim() }
+                    .filter { it.startsWith("upstream/") }
+                    .map { it.removePrefix("upstream/") }
+                    .filter { it.isNotBlank() && !it.contains("->") }
+                    .sorted()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            SwingUtilities.invokeLater {
+                val current = baseBranchCombo.selectedItem?.toString()
+                baseBranchCombo.removeAllItems()
+                baseBranchCombo.addItem("")
+                branches.forEach { baseBranchCombo.addItem(it) }
+                // Restore previously saved value
+                val cfg = DevConfig.load()
+                val preferred = current?.takeIf { it.isNotBlank() && branches.contains(it) }
+                    ?: cfg.git.base_branch.takeIf { branches.contains(it) }
+                val idx = if (preferred != null)
+                    (0 until baseBranchCombo.itemCount).firstOrNull { baseBranchCombo.getItemAt(it) == preferred }
+                else null
+                baseBranchCombo.selectedIndex = idx ?: 0
+            }
+        }
     }
 
     private fun buildUi() {
@@ -65,7 +101,7 @@ class ConfigPanel : JPanel(BorderLayout()) {
         // ── Git section ──────────────────────────────────────────────────────
         gbc.gridy = 0; form.add(sectionLabel("GIT"), gbc)
         gbc.gridy = 1; form.add(fieldLabel("Base branch"), gbc)
-        gbc.gridy = 2; form.add(baseBranchField, gbc)
+        gbc.gridy = 2; form.add(baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) }, gbc)
         gbc.gridy = 3; form.add(fieldLabel("Stack remote"), gbc)
         gbc.gridy = 4; form.add(stackRemoteCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) }, gbc)
         gbc.gridy = 5; form.add(fieldLabel("Default reviewers"), gbc)
@@ -99,7 +135,6 @@ class ConfigPanel : JPanel(BorderLayout()) {
         }
         add(scroll, BorderLayout.CENTER)
 
-        // ── Save button + status ─────────────────────────────────────────────
         val bottom = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.emptyTop(8)
         }
@@ -116,7 +151,7 @@ class ConfigPanel : JPanel(BorderLayout()) {
 
     fun loadConfig() {
         val cfg = DevConfig.load()
-        baseBranchField.text = cfg.git.base_branch
+        // base branch will be set after upstream branches loaded
         val remoteIdx = (stackRemoteCombo.model as DefaultComboBoxModel<String>)
             .getIndexOf(cfg.git.stack_remote)
         if (remoteIdx >= 0) stackRemoteCombo.selectedIndex = remoteIdx
@@ -137,7 +172,7 @@ class ConfigPanel : JPanel(BorderLayout()) {
 
         val cfg = DevConfig(
             git = GitConfig(
-                base_branch = baseBranchField.text.trim(),
+                base_branch = (baseBranchCombo.selectedItem as? String ?: "").trim(),
                 stack_remote = stackRemoteCombo.selectedItem as String,
                 default_reviewers = reviewers,
                 user_session = String(userSessionField.password)

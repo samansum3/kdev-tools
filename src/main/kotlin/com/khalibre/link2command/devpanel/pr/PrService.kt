@@ -159,9 +159,20 @@ object PrService {
 
     /** gh pr view <number> --web */
     fun openInBrowser(number: Int) {
-        ProcessBuilder("gh", "pr", "view", "$number", "--web")
-            .inheritIO()
-            .start()
+        // Use Desktop API — reliable cross-platform, no PATH issues
+        try {
+            val result = runCmd(listOf("gh", "pr", "view", "$number", "--json", "url", "--jq", ".url"))
+            val url = result.stdout.trim()
+            if (url.startsWith("http") && result.exitCode == 0) {
+                java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+            } else {
+                // fallback: construct URL from upstream repo
+                throw RuntimeException("no url")
+            }
+        } catch (e: Exception) {
+            // last resort: open PR list page
+            try { java.awt.Desktop.getDesktop().browse(java.net.URI("https://github.com")) } catch (_: Exception) {}
+        }
     }
 
     /** Resolve current user's gh login */

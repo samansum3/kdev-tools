@@ -22,41 +22,61 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var upstreamRepo: String? = null
     private var ghUser: String? = null
 
+    // Refresh/sync icon button
+    private val syncButton = JButton(AllIcons.Actions.Refresh).apply {
+        toolTipText = "Fetch upstream branches (git fetch upstream --prune)"
+        isFocusPainted = false
+        isBorderPainted = false
+        isContentAreaFilled = false
+        preferredSize = Dimension(24, 24)
+        minimumSize = Dimension(24, 24)
+        maximumSize = Dimension(24, 24)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+    }
+
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
+        loadUpstreamBranches()
     }
 
     private fun buildUi() {
-        // ── Top toolbar: base branch dropdown ─────────────────────────────
+        // ── Top toolbar ────────────────────────────────────────────────────
         val toolbar = JPanel(BorderLayout(6, 0)).apply {
             border = JBUI.Borders.emptyBottom(8)
         }
 
-        val branchLabel = JBLabel("base:").apply {
+        val branchLabel = JBLabel("Base:").apply {
             font = font.deriveFont(font.size - 1f)
         }
+
+        // Combo: auto-sized to content, not filling
         baseBranchCombo.apply {
             addItem("— none —")
-            val cfg = DevConfig.load()
-            if (cfg.git.base_branch.isNotBlank()) addItem(cfg.git.base_branch)
-            addItem("main"); addItem("develop"); addItem("master")
-            // select configured branch
-            val idx = (0 until itemCount).firstOrNull { getItemAt(it) == cfg.git.base_branch } ?: 0
-            selectedIndex = if (idx >= 0) idx else 0
             addActionListener { refresh() }
-            maximumSize = Dimension(Int.MAX_VALUE, 28)
+            preferredSize = Dimension(200, 28)
+            maximumSize = Dimension(200, 28)
+            minimumSize = Dimension(80, 28)
         }
 
-        val branchRow = JPanel(BorderLayout(4, 0))
-        branchRow.add(branchLabel, BorderLayout.WEST)
-        branchRow.add(baseBranchCombo, BorderLayout.CENTER)
+        syncButton.addActionListener { fetchUpstreamAndReload() }
+
+        val branchRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(branchLabel)
+            add(Box.createHorizontalStrut(4))
+            add(baseBranchCombo)
+            add(Box.createHorizontalStrut(4))
+            add(syncButton)
+        }
+
         toolbar.add(branchRow, BorderLayout.CENTER)
         toolbar.add(statusLabel, BorderLayout.SOUTH)
 
         add(toolbar, BorderLayout.NORTH)
 
-        // ── Cards list ────────────────────────────────────────────────────
+        // ── Cards list ─────────────────────────────────────────────────────
         cardsPanel.layout = BoxLayout(cardsPanel, BoxLayout.Y_AXIS)
         cardsPanel.border = JBUI.Borders.empty()
 
@@ -66,6 +86,100 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
         }
         add(scroll, BorderLayout.CENTER)
+    }
+
+    /** Load upstream branches from `git branch -r | grep '^  upstream/'` */
+    fun loadUpstreamBranches(callback: (() -> Unit)? = null) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val branches = fetchUpstreamBranchNames()
+            SwingUtilities.invokeLater {
+                populateBranchCombo(branches)
+                callback?.invoke()
+            }
+        }
+    }
+
+    private fun fetchUpstreamBranchNames(): List<String> {
+        return try {
+            val workDir = project.basePath?.let { java.io.File(it) }
+            val result = PrService.runCmd(
+                listOf("bash", "-c", "git branch -r | grep '^  upstream/'"),
+                workDir
+            )
+            if (result.exitCode != 0) return emptyList()
+            result.stdout.lines()
+                .map { it.trim() }
+                .filter { it.startsWith("upstream/") }
+                .map { it.removePrefix("upstream/") }
+                .filter { it.isNotBlank() && !it.contains("->") }
+                .sorted()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun populateBranchCombo(branches: List<String>) {
+        val previousSelection = baseBranchCombo.selectedItem?.toString()
+        baseBranchCombo.removeAllItems()
+        baseBranchCombo.addItem("— none —")
+        branches.forEach { baseBranchCombo.addItem(it) }
+
+        // Try to restore previous selection, else fall back to config default
+        val cfg = DevConfig.load()
+        val preferred = previousSelection?.takeIf { it != "— none —" && branches.contains(it) }
+            ?: cfg.git.base_branch.takeIf { branches.contains(it) }
+        val idx = if (preferred != null) (0 until baseBranchCombo.itemCount)
+            .firstOrNull { baseBranchCombo.getItemAt(it) == preferred } else null
+        baseBranchCombo.selectedIndex = idx ?: 0
+        baseBranchCombo.revalidate()
+    }
+
+    /** git fetch upstream --prune, then reload branch list */
+    private fun fetchUpstreamAndReload() {
+        setSyncSpinning(true)
+        setStatus("Fetching upstream…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val workDir = project.basePath?.let { java.io.File(it) }
+                PrService.runCmd(listOf("git", "fetch", "upstream", "--prune"), workDir)
+                val branches = fetchUpstreamBranchNames()
+                SwingUtilities.invokeLater {
+                    populateBranchCombo(branches)
+                    setSyncSpinning(false)
+                    setStatus("")
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    setSyncSpinning(false)
+                    setStatus("Fetch failed: ${e.message?.take(60)}")
+                }
+            }
+        }
+    }
+
+    private var spinTimer: Timer? = null
+    private val spinIcons = listOf(
+        AllIcons.Actions.Refresh,
+        AllIcons.Process.Step_1,
+        AllIcons.Process.Step_2,
+        AllIcons.Process.Step_3,
+        AllIcons.Process.Step_4
+    )
+
+    private fun setSyncSpinning(spinning: Boolean) {
+        spinTimer?.stop()
+        spinTimer = null
+        if (spinning) {
+            var frame = 0
+            spinTimer = Timer(120) {
+                syncButton.icon = spinIcons[frame % spinIcons.size]
+                frame++
+            }.also { it.start() }
+            syncButton.isEnabled = false
+        } else {
+            syncButton.icon = AllIcons.Actions.Refresh
+            syncButton.isEnabled = true
+        }
     }
 
     fun refresh() {
@@ -93,7 +207,6 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
 
                 val prs = PrService.fetchPrs(repo, selectedBranch)
 
-                // fetch mergeable states in parallel
                 val mergeableMap = PrService.fetchMergeableStates(repo, prs.map { it.number })
                 prs.forEach { it.mergeable = mergeableMap[it.number] ?: MergeableState.UNKNOWN }
 
@@ -107,7 +220,13 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                         cardsPanel.add(empty)
                     } else {
                         val awaitingCount = prs.count { it.reviewState == ReviewState.AWAITING }
-                        val summaryLabel = JBLabel(buildSummaryText(selectedBranch, prs.size, awaitingCount)).apply {
+                        val summaryLabel = JBLabel(
+                            buildSummaryText(
+                                selectedBranch,
+                                prs.size,
+                                awaitingCount
+                            )
+                        ).apply {
                             border = JBUI.Borders.emptyBottom(6)
                             font = font.deriveFont(font.size - 1f)
                             foreground = JBUI.CurrentTheme.Label.disabledForeground()
@@ -139,73 +258,93 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun buildPrCard(pr: PullRequest, repo: String): JPanel {
         val card = JPanel(GridBagLayout()).apply {
             border = CompoundBorder(
-                BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1, true),
+                BorderFactory.createLineBorder(
+                    JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(),
+                    1,
+                    true
+                ),
                 JBUI.Borders.empty(8, 10)
             )
-            maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
+            // FIX: hug content height — don't allow vertical stretch
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
             alignmentX = LEFT_ALIGNMENT
         }
+
         val gbc = GridBagConstraints().apply {
             gridx = 0; fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
-            insets = JBUI.insets(1, 0, 1, 0)
+            insets = Insets(0, 0, 2, 0)  // no left inset — panels handle their own
         }
 
-        // ── PR number + title ─────────────────────────────────────────────
-        val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply { isOpaque = false }
         val numLabel = JBLabel("#${pr.number}").apply {
             font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1)
             foreground = Color(24, 95, 165)
         }
         val titleLabel = JBLabel("<html><b>${escHtml(pr.title)}</b></html>")
-        titlePanel.add(numLabel)
-        titlePanel.add(titleLabel)
+        val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
+            add(numLabel)
+            add(Box.createHorizontalStrut(4))  // manual gap instead of FlowLayout hgap
+            add(titleLabel)
+        }
         gbc.gridy = 0; card.add(titlePanel, gbc)
 
-        // ── Branch + author + time ────────────────────────────────────────
         val metaText = "${pr.headRefName} → ${pr.baseRefName}  ·  ${pr.author}  ·  ${pr.timeAgo()}"
         val metaLabel = JBLabel(metaText).apply {
             font = font.deriveFont(font.size - 2f)
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            border = JBUI.Borders.emptyTop(1)  // add this for breathing room vs title
         }
         gbc.gridy = 1; card.add(metaLabel, gbc)
 
-        // ── Review status + labels + conflict ─────────────────────────────
-        val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply { isOpaque = false }
-
-        // review badge
         val reviewText = when (pr.reviewState) {
             ReviewState.APPROVED -> "approved by ${pr.approvedBy.joinToString(", ")}"
             ReviewState.CHANGES_REQUESTED -> "changes requested"
             ReviewState.AWAITING -> "awaiting review"
         }
-        badgePanel.add(makeBadge(reviewText, pr.reviewState))
+        val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            border = JBUI.Borders.emptyLeft(-4)
 
-        // conflict badge
-        if (pr.mergeable == MergeableState.CONFLICTING) {
-            badgePanel.add(makeBadge("⚠ conflict", null))
-        }
+            add(makeBadge(reviewText, pr.reviewState))
 
-        // label badges (BE, FE, etc.)
-        pr.labels.forEach { (name, _) ->
-            badgePanel.add(makeLabelBadge(name))
+            if (pr.mergeable == MergeableState.CONFLICTING) {
+                add(makeBadge("⚠ conflict", null))
+            }
+
+            pr.labels.forEach { (name, _) ->
+                add(makeLabelBadge(name))
+            }
         }
 
         gbc.gridy = 2; card.add(badgePanel, gbc)
 
-        // ── Action buttons ────────────────────────────────────────────────
-        val actionPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply { isOpaque = false }
         val isAuthor = pr.author == ghUser
+        val actionPanel = JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
+            isOpaque = false
+            border = JBUI.Borders.emptyLeft(-5) // cancel FlowLayout's first-item left padding
 
-        if (!isAuthor) {
-            actionPanel.add(makeActionButton("approve") { doApprovePr(pr, repo) })
+            if (!isAuthor) {
+                add(makeActionButton("approve") { doApprovePr(pr, repo) })
+            }
+            add(makeActionButton("merge") { doMergePr(pr, repo, false) })
+            if (!isAuthor) {
+                add(makeActionButton("approve + merge") { doMergePr(pr, repo, true) })
+            }
+            add(makeActionButton("view") {
+                try {
+                    java.awt.Desktop.getDesktop().browse(java.net.URI(pr.url))
+                } catch (e: Exception) {
+                    setStatus("Could not open browser")
+                }
+            })
         }
-        actionPanel.add(makeActionButton("merge") { doMergePr(pr, repo, false) })
-        if (!isAuthor) {
-            actionPanel.add(makeActionButton("merge+approve") { doMergePr(pr, repo, true) })
-        }
-        actionPanel.add(makeActionButton("view") { PrService.openInBrowser(pr.number) })
 
         gbc.gridy = 3; card.add(actionPanel, gbc)
+
+        // Finalize max height after all children laid out
+        card.addHierarchyListener {
+            card.maximumSize = Dimension(Int.MAX_VALUE, card.preferredSize.height)
+        }
 
         return card
     }
@@ -216,11 +355,8 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             val result = PrService.approvePr(repo, pr.number)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ Approved #${pr.number}")
-                    refresh()
-                } else {
-                    setStatus("✗ ${result.exceptionOrNull()?.message}")
-                }
+                    setStatus("✓ Approved #${pr.number}"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message}")
             }
         }
     }
@@ -232,11 +368,8 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             val result = PrService.mergePr(repo, pr.number, andApprove)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ Merged #${pr.number}")
-                    refresh()
-                } else {
-                    setStatus("✗ ${result.exceptionOrNull()?.message}")
-                }
+                    setStatus("✓ Merged #${pr.number}"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message}")
             }
         }
     }
@@ -261,7 +394,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             ReviewState.APPROVED -> Color(234, 243, 222)
             ReviewState.CHANGES_REQUESTED -> Color(250, 238, 218)
             ReviewState.AWAITING -> Color(230, 241, 251)
-            null -> Color(252, 235, 235) // conflict - red tint
+            null -> Color(252, 235, 235)
         }
         val fg = when (state) {
             ReviewState.APPROVED -> Color(59, 109, 17)
@@ -270,9 +403,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             null -> Color(163, 45, 45)
         }
         return JLabel(text).apply {
-            isOpaque = true
-            background = bg
-            foreground = fg
+            isOpaque = true; background = bg; foreground = fg
             font = font.deriveFont(font.size - 2f)
             border = JBUI.Borders.empty(2, 6)
         }
@@ -292,10 +423,12 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         return JButton(text).apply {
             font = font.deriveFont(font.size - 1f)
             isFocusPainted = false
-            margin = JBUI.insets(2, 8)
+            isContentAreaFilled = false  // remove default button background padding
+            margin = JBUI.insets(2, 6)
             addActionListener { action() }
         }
     }
 
-    private fun escHtml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    private fun escHtml(s: String) =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }

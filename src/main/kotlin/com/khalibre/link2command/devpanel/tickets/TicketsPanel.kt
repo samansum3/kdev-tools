@@ -343,14 +343,23 @@ class TicketsPanel : JPanel(BorderLayout()) {
             val label = JLabel(text)
             label.font = label.font.deriveFont(label.font.size - 2f)
             label.isOpaque = true
-            label.border = JBUI.Borders.empty(3, 8)
             label.putClientProperty("active", initiallyActive)
+            label.cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
             applyBadgeStyle(label)
 
             label.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     val current = label.getClientProperty("active") == true
                     label.putClientProperty("active", !current)
+                    applyBadgeStyle(label)
+                    label.repaint()
+                }
+                override fun mouseEntered(e: MouseEvent) {
+                    label.putClientProperty("hovered", true)
+                    applyBadgeStyle(label)
+                }
+                override fun mouseExited(e: MouseEvent) {
+                    label.putClientProperty("hovered", false)
                     applyBadgeStyle(label)
                 }
             })
@@ -359,12 +368,22 @@ class TicketsPanel : JPanel(BorderLayout()) {
 
         private fun applyBadgeStyle(label: JLabel) {
             val active = label.getClientProperty("active") == true
+            val hovered = label.getClientProperty("hovered") == true
             if (active) {
-                label.background = Color(230, 241, 251)
+                // Active: solid blue background, white text — clearly ON
+                label.background = Color(24, 95, 165)
+                label.foreground = Color.WHITE
+                label.border = JBUI.Borders.empty(3, 8)
+            } else if (hovered) {
+                // Hover on inactive: light blue tint
+                label.background = Color(210, 228, 248)
                 label.foreground = Color(24, 95, 165)
+                label.border = JBUI.Borders.empty(3, 8)
             } else {
-                label.background = Color(241, 239, 232)
-                label.foreground = Color(95, 94, 90)
+                // Inactive: muted grey — clearly OFF
+                label.background = Color(225, 223, 218)
+                label.foreground = Color(110, 108, 103)
+                label.border = JBUI.Borders.empty(3, 8)
             }
         }
     }
