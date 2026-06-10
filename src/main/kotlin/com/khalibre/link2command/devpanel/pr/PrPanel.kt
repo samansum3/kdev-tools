@@ -61,6 +61,11 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun buildUi() {
         val toolbar = JPanel(BorderLayout(6, 0)).apply {
             border = JBUI.Borders.emptyBottom(8)
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    requestFocusInWindow()
+                }
+            })
         }
 
         baseBranchCombo.apply {
@@ -183,6 +188,12 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(authorCombo)
             add(Box.createHorizontalStrut(4))
             add(authorSyncButton)
+
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    requestFocusInWindow()
+                }
+            })
         }
 
         toolbar.add(branchRow, BorderLayout.CENTER)
@@ -196,6 +207,12 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             border = JBUI.Borders.empty()
             verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    requestFocusInWindow()
+                }
+            })
         }
         add(scroll, BorderLayout.CENTER)
     }

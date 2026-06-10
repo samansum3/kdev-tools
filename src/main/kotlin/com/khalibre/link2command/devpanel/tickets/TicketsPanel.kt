@@ -6,8 +6,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import java.awt.*
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
@@ -20,11 +18,11 @@ class TicketsPanel : JPanel(BorderLayout()) {
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
     // ── Toggle badges ─────────────────────────────────────────────────────
-    private val badgeMyTasks     = makeBadge("my tasks",         true)
-    private val badgeHideDone    = makeBadge("hide done",        true)
-    private val badgeUnassigned  = makeBadge("unassigned",       false)
-    private val badgeInProgress  = makeBadge("in progress",      false)
-    private val badgeDeployedUat = makeBadge("deployed to UAT",  false)
+    private val badgeMyTasks = makeBadge("my tasks", true)
+    private val badgeHideDone = makeBadge("hide done", true)
+    private val badgeUnassigned = makeBadge("unassigned", false)
+    private val badgeInProgress = makeBadge("in progress", false)
+    private val badgeDeployedUat = makeBadge("deployed to UAT", false)
 
     private val typeBadges = listOf(
         "Story", "Epic", "Improvement", "Task", "Sub-task",
@@ -52,6 +50,12 @@ class TicketsPanel : JPanel(BorderLayout()) {
         val topPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
+
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    requestFocusInWindow()
+                }
+            })
         }
 
         // ── Row 1: parent tickets + fix version ───────────────────────────
@@ -61,7 +65,10 @@ class TicketsPanel : JPanel(BorderLayout()) {
 
         fun inputBlock(label: String, field: JTextField): JPanel {
             val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
-            p.add(JBLabel(label).apply { font = font.deriveFont(font.size - 1f) }, BorderLayout.NORTH)
+            p.add(
+                JBLabel(label).apply { font = font.deriveFont(font.size - 1f) },
+                BorderLayout.NORTH
+            )
             p.add(field, BorderLayout.CENTER)
             return p
         }
@@ -73,7 +80,12 @@ class TicketsPanel : JPanel(BorderLayout()) {
         // ── Filters ───────────────────────────────────────────────────────
         topPanel.add(filterSection("owner", listOf(badgeMyTasks)))
         topPanel.add(Box.createVerticalStrut(4))
-        topPanel.add(filterSection("status", listOf(badgeHideDone, badgeUnassigned, badgeInProgress, badgeDeployedUat)))
+        topPanel.add(
+            filterSection(
+                "status",
+                listOf(badgeHideDone, badgeUnassigned, badgeInProgress, badgeDeployedUat)
+            )
+        )
         topPanel.add(Box.createVerticalStrut(4))
         topPanel.add(filterSection("type", typeBadges))
         topPanel.add(Box.createVerticalStrut(6))
@@ -88,6 +100,12 @@ class TicketsPanel : JPanel(BorderLayout()) {
             border = JBUI.Borders.empty()
             verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    requestFocusInWindow()
+                }
+            })
         }
         add(scroll, BorderLayout.CENTER)
 
@@ -169,11 +187,13 @@ class TicketsPanel : JPanel(BorderLayout()) {
 
         val fixVersion = fixVersionField.text.trim()
 
-        val activeTypes = typeBadges.zip(listOf(
-            "Story", "Epic", "Improvement", "Task", "Sub-task",
-            "Bug", "Defect", "Operations", "Test Report",
-            "Release Procedure", "Translation Update"
-        )).filter { (badge, _) -> badge.getClientProperty("active") == true }
+        val activeTypes = typeBadges.zip(
+            listOf(
+                "Story", "Epic", "Improvement", "Task", "Sub-task",
+                "Bug", "Defect", "Operations", "Test Report",
+                "Release Procedure", "Translation Update"
+            )
+        ).filter { (badge, _) -> badge.getClientProperty("active") == true }
             .map { (_, name) -> name }
             .toSet()
 
@@ -192,7 +212,11 @@ class TicketsPanel : JPanel(BorderLayout()) {
     private fun buildTicketCard(ticket: JiraTicket): JPanel {
         val card = JPanel(GridBagLayout()).apply {
             border = CompoundBorder(
-                BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1, true),
+                BorderFactory.createLineBorder(
+                    JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(),
+                    1,
+                    true
+                ),
                 JBUI.Borders.empty(8, 10)
             )
             maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
@@ -236,7 +260,8 @@ class TicketsPanel : JPanel(BorderLayout()) {
         }
         metaPanel.add(JBLabel(assigneeText).apply {
             font = font.deriveFont(font.size - 2f)
-            foreground = if (isMe) Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
+            foreground =
+                if (isMe) Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
         })
         gbc.gridy = 2; card.add(metaPanel, gbc)
 
@@ -293,8 +318,9 @@ class TicketsPanel : JPanel(BorderLayout()) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionTicket(key, targetStatus)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → $targetStatus"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → $targetStatus"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
@@ -304,8 +330,9 @@ class TicketsPanel : JPanel(BorderLayout()) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionToInProgress(key)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → In Progress"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → In Progress"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
@@ -315,8 +342,9 @@ class TicketsPanel : JPanel(BorderLayout()) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionToPendingQa(key)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → Pending QA"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → Pending QA"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
@@ -326,8 +354,9 @@ class TicketsPanel : JPanel(BorderLayout()) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionToDeployedUat(key)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → Deployed to UAT"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → Deployed to UAT"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
@@ -354,10 +383,12 @@ class TicketsPanel : JPanel(BorderLayout()) {
                     applyBadgeStyle(label)
                     label.repaint()
                 }
+
                 override fun mouseEntered(e: MouseEvent) {
                     label.putClientProperty("hovered", true)
                     applyBadgeStyle(label)
                 }
+
                 override fun mouseExited(e: MouseEvent) {
                     label.putClientProperty("hovered", false)
                     applyBadgeStyle(label)
@@ -390,10 +421,25 @@ class TicketsPanel : JPanel(BorderLayout()) {
 
     private fun makeStatusBadge(status: String): JLabel {
         val (bg, fg) = when (status) {
-            "In Progress", "Defining AC", "PR Open" -> Pair(Color(230, 241, 251), Color(24, 95, 165))
-            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" -> Pair(Color(234, 243, 222), Color(59, 109, 17))
+            "In Progress", "Defining AC", "PR Open" -> Pair(
+                Color(230, 241, 251),
+                Color(24, 95, 165)
+            )
+
+            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" -> Pair(
+                Color(
+                    234,
+                    243,
+                    222
+                ), Color(59, 109, 17)
+            )
+
             "Blocked", "Failed QA" -> Pair(Color(252, 235, 235), Color(163, 45, 45))
-            "Submitted for Review", "Pending AC Review" -> Pair(Color(250, 238, 218), Color(133, 79, 11))
+            "Submitted for Review", "Pending AC Review" -> Pair(
+                Color(250, 238, 218),
+                Color(133, 79, 11)
+            )
+
             else -> Pair(Color(241, 239, 232), Color(95, 94, 90))
         }
         return JLabel(status).apply {
@@ -439,5 +485,6 @@ class TicketsPanel : JPanel(BorderLayout()) {
         }
     }
 
-    private fun escHtml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    private fun escHtml(s: String) =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }

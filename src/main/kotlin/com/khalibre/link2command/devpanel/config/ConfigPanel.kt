@@ -58,6 +58,11 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun buildUi() {
         val form = JPanel(GridBagLayout())
+        form.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                requestFocusInWindow()
+            }
+        })
 
         fun sectionLabel(text: String) = JBLabel(text).apply {
             font = font.deriveFont(Font.BOLD, font.size - 1f)
