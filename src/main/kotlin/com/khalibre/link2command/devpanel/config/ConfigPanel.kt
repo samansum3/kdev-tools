@@ -1,20 +1,17 @@
 package com.khalibre.link2command.devpanel.config
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
-import com.khalibre.link2command.devpanel.pr.PrService
-import java.awt.BorderLayout
-import java.awt.Dimension
-import java.awt.FlowLayout
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
+import com.khalibre.link2command.devpanel.pr.GitService
+import java.awt.*
 import javax.swing.*
 
-class ConfigPanel : JPanel(BorderLayout()) {
+class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // Base branch is now a dropdown (loaded from upstream branches)
     private val baseBranchCombo = JComboBox<String>()
@@ -41,19 +38,7 @@ class ConfigPanel : JPanel(BorderLayout()) {
 
     private fun loadUpstreamBranches() {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val branches = try {
-                // No project context here; use current working dir
-                val result = PrService.runCmd(listOf("bash", "-c", "git branch -r | grep '^  upstream/'"))
-                if (result.exitCode != 0) emptyList()
-                else result.stdout.lines()
-                    .map { it.trim() }
-                    .filter { it.startsWith("upstream/") }
-                    .map { it.removePrefix("upstream/") }
-                    .filter { it.isNotBlank() && !it.contains("->") }
-                    .sorted()
-            } catch (e: Exception) {
-                emptyList()
-            }
+            val branches = GitService.fetchUpstreamBranchNames()
             SwingUtilities.invokeLater {
                 val current = baseBranchCombo.selectedItem?.toString()
                 baseBranchCombo.removeAllItems()
@@ -73,24 +58,16 @@ class ConfigPanel : JPanel(BorderLayout()) {
 
     private fun buildUi() {
         val form = JPanel(GridBagLayout())
-        val gbc = GridBagConstraints().apply {
-            fill = GridBagConstraints.HORIZONTAL
-            weightx = 1.0
-            gridx = 0
-            insets = JBUI.insets(2, 0, 2, 0)
-        }
 
-        fun sectionLabel(text: String): JBLabel {
-            return JBLabel(text).apply {
-                font = font.deriveFont(font.size - 1f)
-                foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                border = JBUI.Borders.emptyTop(8)
-            }
+        fun sectionLabel(text: String) = JBLabel(text).apply {
+            font = font.deriveFont(Font.BOLD, font.size - 1f)
+            foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            border = JBUI.Borders.emptyTop(12)
         }
 
         fun fieldLabel(text: String) = JBLabel(text).apply {
             font = font.deriveFont(font.size - 1f)
-            border = JBUI.Borders.emptyTop(4)
+            border = JBUI.Borders.emptyTop(6)
         }
 
         fun hint(text: String) = JBLabel(text).apply {
@@ -98,35 +75,66 @@ class ConfigPanel : JPanel(BorderLayout()) {
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
         }
 
-        // ── Git section ──────────────────────────────────────────────────────
-        gbc.gridy = 0; form.add(sectionLabel("GIT"), gbc)
-        gbc.gridy = 1; form.add(fieldLabel("Base branch"), gbc)
-        gbc.gridy = 2; form.add(baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) }, gbc)
-        gbc.gridy = 3; form.add(fieldLabel("Stack remote"), gbc)
-        gbc.gridy = 4; form.add(stackRemoteCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) }, gbc)
-        gbc.gridy = 5; form.add(fieldLabel("Default reviewers"), gbc)
-        gbc.gridy = 6; form.add(reviewersField, gbc)
-        gbc.gridy = 7; form.add(hint("Comma-separated GitHub usernames"), gbc)
-        gbc.gridy = 8; form.add(fieldLabel("User session (cookie for PR upload)"), gbc)
-        gbc.gridy = 9; form.add(userSessionField, gbc)
+        // full-width row helper
+        fun fullRow(row: Int, comp: JComponent) {
+            form.add(comp, GridBagConstraints().apply {
+                gridx = 0; gridy = row; gridwidth = 3
+                fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
+                insets = JBUI.insets(0)
+            })
+        }
 
-        // ── Jira section ─────────────────────────────────────────────────────
-        gbc.gridy = 10; form.add(sectionLabel("JIRA"), gbc)
-        gbc.gridy = 11; form.add(fieldLabel("Base URL"), gbc)
-        gbc.gridy = 12; form.add(jiraUrlField, gbc)
-        gbc.gridy = 13; form.add(fieldLabel("Project key"), gbc)
-        gbc.gridy = 14; form.add(projectKeyField, gbc)
-        gbc.gridy = 15; form.add(fieldLabel("Email"), gbc)
-        gbc.gridy = 16; form.add(emailField, gbc)
-        gbc.gridy = 17; form.add(fieldLabel("API token"), gbc)
-        gbc.gridy = 18; form.add(apiTokenField, gbc)
-        gbc.gridy = 19; form.add(hint("Stored in ~/.config/devtools/config.json"), gbc)
+        // two-column row helpers (left | gap | right)
+        fun leftCell(row: Int, comp: JComponent) {
+            form.add(comp, GridBagConstraints().apply {
+                gridx = 0; gridy = row; gridwidth = 1
+                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
+                insets = JBUI.insets(0, 0, 0, 4)
+            })
+        }
+
+        fun rightCell(row: Int, comp: JComponent) {
+            form.add(comp, GridBagConstraints().apply {
+                gridx = 1; gridy = row; gridwidth = 1
+                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
+                insets = JBUI.insets(0, 4, 0, 0)
+            })
+        }
+
+        // ── GIT ─────────────────────────────────────────────────────────────────
+        fullRow(0, sectionLabel("GIT"))
+
+        leftCell(1, fieldLabel("Base branch"))
+        rightCell(1, fieldLabel("Stack remote"))
+        leftCell(2, baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+        rightCell(2, stackRemoteCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+
+        fullRow(3, fieldLabel("Default reviewers"))
+        fullRow(4, reviewersField)
+
+        fullRow(5, fieldLabel("User session (cookie for PR upload)"))
+        fullRow(6, userSessionField)
+
+        // ── JIRA ─────────────────────────────────────────────────────────────────
+        fullRow(7, sectionLabel("JIRA"))
+
+        leftCell(8, fieldLabel("Base URL"))
+        rightCell(8, fieldLabel("Project key"))
+        leftCell(9, jiraUrlField)
+        rightCell(9, projectKeyField)
+
+        leftCell(10, fieldLabel("Email"))
+        rightCell(10, fieldLabel("API token"))
+        leftCell(11, emailField)
+        rightCell(11, apiTokenField)
+
+        fullRow(12, hint("Stored in ~/.config/devtools/config.json"))
 
         // spacer
-        gbc.gridy = 20
-        gbc.weighty = 1.0
-        gbc.fill = GridBagConstraints.BOTH
-        form.add(JPanel(), gbc)
+        form.add(JPanel(), GridBagConstraints().apply {
+            gridx = 0; gridy = 13; gridwidth = 3
+            weighty = 1.0; fill = GridBagConstraints.BOTH
+        })
 
         val scroll = JBScrollPane(form).apply {
             border = JBUI.Borders.empty()
@@ -141,11 +149,11 @@ class ConfigPanel : JPanel(BorderLayout()) {
         val saveBtn = JButton("Save Config").apply {
             addActionListener { saveConfig() }
         }
-        val statusRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            add(statusLabel)
-        }
         bottom.add(saveBtn, BorderLayout.NORTH)
-        bottom.add(statusRow, BorderLayout.SOUTH)
+        bottom.add(
+            JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { add(statusLabel) },
+            BorderLayout.SOUTH
+        )
         add(bottom, BorderLayout.SOUTH)
     }
 

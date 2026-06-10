@@ -91,30 +91,11 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     /** Load upstream branches from `git branch -r | grep '^  upstream/'` */
     fun loadUpstreamBranches(callback: (() -> Unit)? = null) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val branches = fetchUpstreamBranchNames()
+            val branches = GitService.fetchUpstreamBranchNames()
             SwingUtilities.invokeLater {
                 populateBranchCombo(branches)
                 callback?.invoke()
             }
-        }
-    }
-
-    private fun fetchUpstreamBranchNames(): List<String> {
-        return try {
-            val workDir = project.basePath?.let { java.io.File(it) }
-            val result = PrService.runCmd(
-                listOf("bash", "-c", "git branch -r | grep '^  upstream/'"),
-                workDir
-            )
-            if (result.exitCode != 0) return emptyList()
-            result.stdout.lines()
-                .map { it.trim() }
-                .filter { it.startsWith("upstream/") }
-                .map { it.removePrefix("upstream/") }
-                .filter { it.isNotBlank() && !it.contains("->") }
-                .sorted()
-        } catch (e: Exception) {
-            emptyList()
         }
     }
 
@@ -142,7 +123,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             try {
                 val workDir = project.basePath?.let { java.io.File(it) }
                 PrService.runCmd(listOf("git", "fetch", "upstream", "--prune"), workDir)
-                val branches = fetchUpstreamBranchNames()
+                val branches = GitService.fetchUpstreamBranchNames()
                 SwingUtilities.invokeLater {
                     populateBranchCombo(branches)
                     setSyncSpinning(false)

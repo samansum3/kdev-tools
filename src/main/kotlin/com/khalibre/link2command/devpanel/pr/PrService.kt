@@ -1,11 +1,16 @@
 package com.khalibre.link2command.devpanel.pr
 
 import com.google.gson.Gson
-import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
+import java.awt.Desktop
 import java.io.File
+import java.net.URI
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 enum class MergeableState { MERGEABLE, CONFLICTING, UNKNOWN }
 enum class ReviewState { AWAITING, APPROVED, CHANGES_REQUESTED }
@@ -48,7 +53,7 @@ data class PullRequest(
 
     fun timeAgo(): String {
         return try {
-            val instant = java.time.Instant.parse(updatedAt)
+            val instant = Instant.parse(updatedAt)
             val diffMs = System.currentTimeMillis() - instant.toEpochMilli()
             val mins = diffMs / 60000
             val hours = mins / 60
@@ -111,8 +116,8 @@ object PrService {
             Pair(num, thread)
         }
 
-        val results = java.util.concurrent.ConcurrentHashMap<Int, MergeableState>()
-        val latch = java.util.concurrent.CountDownLatch(numbers.size)
+        val results = ConcurrentHashMap<Int, MergeableState>()
+        val latch = CountDownLatch(numbers.size)
 
         numbers.forEach { num ->
             Thread {
@@ -135,7 +140,7 @@ object PrService {
             }.start()
         }
 
-        latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        latch.await(30, TimeUnit.SECONDS)
         return results
     }
 
@@ -164,14 +169,14 @@ object PrService {
             val result = runCmd(listOf("gh", "pr", "view", "$number", "--json", "url", "--jq", ".url"))
             val url = result.stdout.trim()
             if (url.startsWith("http") && result.exitCode == 0) {
-                java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+                Desktop.getDesktop().browse(URI(url))
             } else {
                 // fallback: construct URL from upstream repo
                 throw RuntimeException("no url")
             }
         } catch (e: Exception) {
             // last resort: open PR list page
-            try { java.awt.Desktop.getDesktop().browse(java.net.URI("https://github.com")) } catch (_: Exception) {}
+            try { Desktop.getDesktop().browse(URI("https://github.com")) } catch (_: Exception) {}
         }
     }
 
