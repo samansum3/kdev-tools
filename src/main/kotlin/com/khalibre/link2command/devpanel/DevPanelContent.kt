@@ -7,6 +7,7 @@ import com.khalibre.link2command.devpanel.pr.PrPanel
 import com.khalibre.link2command.devpanel.tickets.TicketsPanel
 import java.awt.BorderLayout
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 class DevPanelContent(project: Project) : JPanel(BorderLayout()) {
 
@@ -23,6 +24,9 @@ class DevPanelContent(project: Project) : JPanel(BorderLayout()) {
     init {
         add(tabs, BorderLayout.CENTER)
         tabs.addChangeListener { refreshCurrentTab() }
+
+        // load selected tab data on startup
+        SwingUtilities.invokeLater { refreshCurrentTab() }
     }
 
     fun refreshCurrentTab() {
