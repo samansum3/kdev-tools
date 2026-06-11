@@ -366,9 +366,6 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     fun refresh() {
         setStatus("Loading…")
-        cardsPanel.removeAll()
-        cardsPanel.revalidate()
-        cardsPanel.repaint()
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
@@ -379,6 +376,9 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 if (repo == null) {
                     SwingUtilities.invokeLater {
                         setStatus("No upstream remote found")
+                        cardsPanel.removeAll()
+                        cardsPanel.revalidate()
+                        cardsPanel.repaint()
                         showError("Could not determine upstream repo.\nMake sure you have an 'upstream' git remote.")
                     }
                     return@executeOnPooledThread
