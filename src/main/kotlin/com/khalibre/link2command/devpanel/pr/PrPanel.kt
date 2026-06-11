@@ -500,15 +500,10 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         gbc.gridy = 1; card.add(metaPanel, gbc)
 
         val reviewText = when (pr.reviewState) {
-            ReviewState.APPROVED -> "✓ approved by ${pr.approvedBy.joinToString(", ")}"
-            ReviewState.CHANGES_REQUESTED -> "changes requested by ${
-                pr.changesRequestedBy.joinToString(
-                    ", "
-                )
-            }"
-
-            ReviewState.COMMENTED -> "commented by ${pr.commentedBy.joinToString(", ")}"
-            ReviewState.AWAITING -> "awaiting review"
+            ReviewState.APPROVED -> "✓ ${truncateNames(pr.approvedBy)}"
+            ReviewState.CHANGES_REQUESTED -> "✗ ${truncateNames(pr.changesRequestedBy)}"
+            ReviewState.COMMENTED -> "💬 ${truncateNames(pr.commentedBy)}"
+            ReviewState.AWAITING -> "⏳ review"
         }
         val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
@@ -527,7 +522,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             if (isAuthor) {
                 add(makeActionButton("checkout") { doCheckout(pr, repo) })
                 add(makeActionButton("rebase") { doRebase(pr, repo) })
-                add(makeActionButton("update-pr") { doUpdatePr(pr) })
+                add(makeActionButton("update pr") { doUpdatePr(pr) })
             } else {
                 add(makeActionButton("approve") { doApprovePr(pr, repo) })
                 add(makeActionButton("approve + merge") { doMergePr(pr, repo, true) })
@@ -549,6 +544,11 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
 
         return card
+    }
+
+    private fun truncateNames(names: List<String>): String {
+        if (names.size <= 2) return names.joinToString(", ")
+        return "${names.take(1).joinToString(", ")} +${names.size - 1} more"
     }
 
     private fun doCheckout(pr: PullRequest, repo: String) {
