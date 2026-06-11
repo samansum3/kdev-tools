@@ -8,6 +8,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.pr.GitService
+import com.khalibre.link2command.devpanel.pr.PrService
 import java.awt.*
 import javax.swing.*
 
@@ -15,7 +16,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // Base branch is now a dropdown (loaded from upstream branches)
     private val baseBranchCombo = JComboBox<String>()
-    private val stackRemoteCombo = JComboBox(arrayOf("origin", "upstream"))
+    private val stackRemoteCombo = JComboBox<String>()
     private val reviewersField = JBTextField()
     private val userSessionField = JBPasswordField()
 
@@ -34,6 +35,31 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         buildUi()
         loadConfig()
         loadUpstreamBranches()
+        loadRemotes()
+    }
+
+    private fun loadRemotes() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val remotes = try {
+                val result = PrService.runCmd(listOf("git", "remote"))
+                if (result.exitCode != 0) listOf("origin", "upstream")
+                else result.stdout.lines().map { it.trim() }.filter { it.isNotBlank() }
+            } catch (e: Exception) {
+                listOf("origin", "upstream")
+            }
+            SwingUtilities.invokeLater {
+                val current = stackRemoteCombo.selectedItem?.toString()
+                stackRemoteCombo.removeAllItems()
+                remotes.forEach { stackRemoteCombo.addItem(it) }
+                val cfg = DevConfig.load()
+                val preferred = current?.takeIf { remotes.contains(it) }
+                    ?: cfg.git.stack_remote.takeIf { remotes.contains(it) }
+                val idx = if (preferred != null)
+                    (0 until stackRemoteCombo.itemCount).firstOrNull { stackRemoteCombo.getItemAt(it) == preferred }
+                else null
+                stackRemoteCombo.selectedIndex = idx ?: 0
+            }
+        }
     }
 
     private fun loadUpstreamBranches() {
