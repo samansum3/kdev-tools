@@ -668,6 +668,18 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
             isContentAreaFilled = false
             margin = JBUI.insets(2, 6)
             addActionListener { action() }
+
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseEntered(e: java.awt.event.MouseEvent) {
+                    isContentAreaFilled = true
+                    repaint()
+                }
+
+                override fun mouseExited(e: java.awt.event.MouseEvent) {
+                    isContentAreaFilled = false
+                    repaint()
+                }
+            })
         }
     }
 
