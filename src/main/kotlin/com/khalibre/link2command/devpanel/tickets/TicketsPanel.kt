@@ -1,6 +1,7 @@
 package com.khalibre.link2command.devpanel.tickets
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -9,17 +10,18 @@ import com.khalibre.link2command.devpanel.common.CardUtils
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.io.File
 import javax.swing.*
 
-class TicketsPanel : JPanel(BorderLayout()) {
+class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()) {
 
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
-    private val fixVersionField  = JBTextField().apply { toolTipText = "e.g. 13073" }
+    private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
-    private val badgeMyTasks     = makeBadge("my tasks",        true)
-    private val badgeHideDone    = makeBadge("hide done",       true)
-    private val badgeUnassigned  = makeBadge("unassigned",      false)
-    private val badgeInProgress  = makeBadge("in progress",     false)
+    private val badgeMyTasks = makeBadge("my tasks", true)
+    private val badgeHideDone = makeBadge("hide done", true)
+    private val badgeUnassigned = makeBadge("unassigned", false)
+    private val badgeInProgress = makeBadge("in progress", false)
     private val badgeDeployedUat = makeBadge("deployed to UAT", false)
 
     private val typeNames = listOf(
@@ -40,22 +42,83 @@ class TicketsPanel : JPanel(BorderLayout()) {
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
+        loadFromGitCw()   // populate fields from .git/cw/ on open
     }
+
+    // ── .git/cw persistence ──────────────────────────────────────────────────
+
+    /** Resolve the git root of the current project, or null. */
+    private fun gitRoot(): File? {
+        val base = project?.basePath ?: return null
+        var dir = File(base)
+        while (dir.parentFile != null) {
+            if (File(dir, ".git").isDirectory) return dir
+            dir = dir.parentFile
+        }
+        return null
+    }
+
+    private fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
+
+    /** Read .git/cw/parent-tickets (one key per line) and .git/cw/fix-version */
+    private fun loadFromGitCw() {
+        val cw = cwDir() ?: return
+        val parentFile = File(cw, "parent-tickets")
+        val versionFile = File(cw, "fix-version")
+
+        if (parentKeysField.text.isBlank() && parentFile.exists()) {
+            val keys = parentFile.readLines()
+                .map { it.trim() }
+                .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+            if (keys.isNotEmpty()) parentKeysField.text = keys.joinToString(", ")
+        }
+
+        if (fixVersionField.text.isBlank() && versionFile.exists()) {
+            val v = versionFile.readText().trim()
+            if (v.isNotBlank()) fixVersionField.text = v
+        }
+    }
+
+    /** Persist current field values back to .git/cw/ */
+    private fun saveToGitCw() {
+        val cw = cwDir() ?: return
+        cw.mkdirs()
+
+        val keys = parentKeysField.text.split(",")
+            .map { it.trim().uppercase() }
+            .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+        if (keys.isNotEmpty()) {
+            File(cw, "parent-tickets").writeText(keys.joinToString("\n"))
+        }
+
+        val ver = fixVersionField.text.trim()
+        if (ver.isNotBlank()) {
+            File(cw, "fix-version").writeText(ver)
+        }
+    }
+
+    // ── UI construction ───────────────────────────────────────────────────────
 
     private fun buildUi() {
         val topPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
             addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) { requestFocusInWindow() }
+                override fun mouseClicked(e: MouseEvent) {
+                    requestFocusInWindow()
+                }
             })
         }
 
         val inputRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 54)
         }
+
         fun inputBlock(label: String, field: JTextField): JPanel {
             val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
-            p.add(JBLabel(label).apply { font = font.deriveFont(font.size - 1f) }, BorderLayout.NORTH)
+            p.add(
+                JBLabel(label).apply { font = font.deriveFont(font.size - 1f) },
+                BorderLayout.NORTH
+            )
             p.add(field, BorderLayout.CENTER)
             return p
         }
@@ -64,11 +127,16 @@ class TicketsPanel : JPanel(BorderLayout()) {
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
 
-        topPanel.add(filterSection("owner",  listOf(badgeMyTasks)))
+        topPanel.add(filterSection("owner", listOf(badgeMyTasks)))
         topPanel.add(Box.createVerticalStrut(4))
-        topPanel.add(filterSection("status", listOf(badgeHideDone, badgeUnassigned, badgeInProgress, badgeDeployedUat)))
+        topPanel.add(
+            filterSection(
+                "status",
+                listOf(badgeHideDone, badgeUnassigned, badgeInProgress, badgeDeployedUat)
+            )
+        )
         topPanel.add(Box.createVerticalStrut(4))
-        topPanel.add(filterSection("type",   typeBadges))
+        topPanel.add(filterSection("type", typeBadges))
         topPanel.add(Box.createVerticalStrut(6))
         topPanel.add(statusLabel)
         topPanel.add(Box.createVerticalStrut(4))
@@ -80,7 +148,9 @@ class TicketsPanel : JPanel(BorderLayout()) {
             verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
             addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) { requestFocusInWindow() }
+                override fun mouseClicked(e: MouseEvent) {
+                    requestFocusInWindow()
+                }
             })
         }
         add(scroll, BorderLayout.CENTER)
@@ -101,13 +171,32 @@ class TicketsPanel : JPanel(BorderLayout()) {
         return p
     }
 
+    // ── Refresh / data loading ────────────────────────────────────────────────
+
     fun refresh() {
-        setStatus("Loading…")
         val filters = buildFilters()
+
+        // Guard: nothing to query if neither parent keys nor fix version are provided
+        if (filters.parentKeys.isEmpty() && filters.fixVersion.isBlank()) {
+            SwingUtilities.invokeLater {
+                cardsPanel.removeAll()
+                cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s) or a fix version to load tickets.</i></html>").apply {
+                    border = JBUI.Borders.empty(16, 4)
+                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                })
+                cardsPanel.revalidate(); cardsPanel.repaint()
+                setStatus("")
+            }
+            return
+        }
+
+        saveToGitCw()
+        setStatus("Loading…")
+
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 if (currentUserEmail == null) currentUserEmail = JiraService.currentUserEmail()
-                val jql = JiraService.buildJql(filters, currentUserEmail)
+                val jql = JiraService.buildJql(filters)
                 val tickets = JiraService.searchTickets(jql)
                 SwingUtilities.invokeLater {
                     cardsPanel.removeAll()
@@ -150,60 +239,73 @@ class TicketsPanel : JPanel(BorderLayout()) {
             .filter { (badge, _) -> badge.getClientProperty("active") == true }
             .map { (_, name) -> name }.toSet()
         return TicketFilters(
-            parentKeys   = parentKeys,
-            fixVersion   = fixVersionField.text.trim(),
-            myTasks      = badgeMyTasks.getClientProperty("active") == true,
-            hideDone     = badgeHideDone.getClientProperty("active") == true,
-            unassigned   = badgeUnassigned.getClientProperty("active") == true,
-            inProgress   = badgeInProgress.getClientProperty("active") == true,
-            deployedUat  = badgeDeployedUat.getClientProperty("active") == true,
-            typeFilter   = activeTypes
+            parentKeys = parentKeys,
+            fixVersion = fixVersionField.text.trim(),
+            myTasks = badgeMyTasks.getClientProperty("active") == true,
+            hideDone = badgeHideDone.getClientProperty("active") == true,
+            unassigned = badgeUnassigned.getClientProperty("active") == true,
+            inProgress = badgeInProgress.getClientProperty("active") == true,
+            deployedUat = badgeDeployedUat.getClientProperty("active") == true,
+            typeFilter = activeTypes
         )
     }
+
+    // ── Card builder ─────────────────────────────────────────────────────────
 
     private fun buildTicketCard(ticket: JiraTicket): JPanel {
         val card = CardUtils.makeCard()
         val gbc = CardUtils.cardGbc()
 
-        // ── Row 0: key + truncating summary ──────────────────────────────
+        // ── Row 0: key + truncating summary ──────────────────────────────────
         val titlePanel = JPanel(GridBagLayout()).apply {
             isOpaque = false
             val g = GridBagConstraints()
-            g.gridx = 0; g.gridy = 0; g.weightx = 0.0; g.fill = GridBagConstraints.NONE; g.insets = Insets(0, 0, 0, 4)
+            g.gridx = 0; g.gridy = 0; g.weightx = 0.0; g.fill = GridBagConstraints.NONE; g.insets =
+            Insets(0, 0, 0, 4)
             add(JBLabel(ticket.key).apply {
-                font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1); foreground = Color(24, 95, 165)
+                font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1); foreground =
+                Color(24, 95, 165)
             }, g)
-            g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL; g.insets = Insets(0, 0, 0, 0)
+            g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL; g.insets =
+            Insets(0, 0, 0, 0)
             add(JBLabel(ticket.summary).apply {
                 font = font.deriveFont(Font.BOLD); minimumSize = Dimension(0, preferredSize.height)
             }, g)
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
 
-        // ── Row 1: type icon + priority icon + assignee ───────────────────
+        // ── Row 1: status badge · type · priority · assignee ─────────────────
         val isMe = ticket.assigneeEmail != null && ticket.assigneeEmail == currentUserEmail
         val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
 
+        // Status badge — now on this row instead of its own row
+        metaPanel.add(makeStatusBadge(ticket.status))
+        metaPanel.add(Box.createHorizontalStrut(6))
+
         ticket.issueType?.let { typeName ->
-            val iconLabel = JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = typeName }
+            val iconLabel =
+                JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = typeName }
             loadIconAsync(ticket.issueTypeIconUrl, 14) { iconLabel.icon = it; metaPanel.repaint() }
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(typeName).apply {
-                font = font.deriveFont(font.size - 2f); foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 2f); foreground =
+                JBUI.CurrentTheme.Label.disabledForeground()
             })
             metaPanel.add(sepLabel())
         }
 
         ticket.priority?.let { priorityName ->
-            val iconLabel = JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = priorityName }
+            val iconLabel =
+                JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = priorityName }
             loadIconAsync(ticket.priorityIconUrl, 14) { iconLabel.icon = it; metaPanel.repaint() }
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(priorityName).apply {
-                font = font.deriveFont(font.size - 2f); foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 2f); foreground =
+                JBUI.CurrentTheme.Label.disabledForeground()
             })
             metaPanel.add(sepLabel())
         }
@@ -215,100 +317,126 @@ class TicketsPanel : JPanel(BorderLayout()) {
         }
         metaPanel.add(JBLabel(assigneeText).apply {
             font = font.deriveFont(font.size - 2f)
-            foreground = if (isMe) Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
+            foreground =
+                if (isMe) Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
         })
         gbc.gridy = 1; card.add(metaPanel, gbc)
 
-        // ── Row 2: status badge ────────────────────────────────────────────
-        val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-            isOpaque = false; border = JBUI.Borders.emptyLeft(-4)
-            add(makeStatusBadge(ticket.status))
-        }
-        gbc.gridy = 2; card.add(badgePanel, gbc)
-
-        // ── Row 3: action buttons ──────────────────────────────────────────
+        // ── Row 2: action buttons ─────────────────────────────────────────────
         val actionPanel = JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyLeft(-5)
         }
         addTicketActions(actionPanel, ticket, isMe)
-        gbc.gridy = 3; card.add(actionPanel, gbc)
+        gbc.gridy = 2; card.add(actionPanel, gbc)
 
-        card.addHierarchyListener { card.maximumSize = Dimension(Int.MAX_VALUE, card.preferredSize.height) }
+        card.addHierarchyListener {
+            card.maximumSize = Dimension(Int.MAX_VALUE, card.preferredSize.height)
+        }
         return card
     }
 
     private fun sepLabel() = JBLabel("  ·  ").apply {
-        font = font.deriveFont(font.size - 2f); foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        font = font.deriveFont(font.size - 2f); foreground =
+        JBUI.CurrentTheme.Label.disabledForeground()
     }
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
         val status = ticket.status
         val isUnassigned = ticket.assigneeName == null
+        // pick-ticket: git checkout + assign + transition — must run in terminal
         if (isUnassigned || status == "Failed QA")
-            panel.add(CardUtils.makeActionButton("pick") { doTransition(ticket.key, "pick") })
+            panel.add(CardUtils.makeActionButton("pick") { doPickTicket(ticket.key) })
+        // All remaining buttons are pure Jira status transitions — direct API calls
         if (isMe && status in listOf("Deployed to UAT", "Pending QA", "Merged"))
             panel.add(CardUtils.makeTransitionButton("in progress") { doTransitionInProgress(ticket.key) })
         if (isMe && status == "In Progress")
-            panel.add(CardUtils.makeTransitionButton("PR Open") { doTransition(ticket.key, "PR Open") })
+            panel.add(CardUtils.makeTransitionButton("PR Open") {
+                doTransition(
+                    ticket.key,
+                    "PR Open"
+                )
+            })
         if (isMe && status == "PR Open")
-            panel.add(CardUtils.makeTransitionButton("Merged") { doTransition(ticket.key, "Merged") })
+            panel.add(CardUtils.makeTransitionButton("Merged") {
+                doTransition(
+                    ticket.key,
+                    "Merged"
+                )
+            })
         if (status == "Merged")
-            panel.add(CardUtils.makeTransitionButton("Deployed UAT") { doTransitionDeployedUat(ticket.key) })
+            panel.add(CardUtils.makeTransitionButton("Deployed UAT") {
+                doTransition(
+                    ticket.key,
+                    "Deployed to UAT"
+                )
+            })
         if (status == "Deployed to UAT")
-            panel.add(CardUtils.makeTransitionButton("Pending QA") { doTransitionPendingQa(ticket.key) })
+            panel.add(CardUtils.makeTransitionButton("Pending QA") {
+                doTransition(
+                    ticket.key,
+                    "Pending QA"
+                )
+            })
         panel.add(CardUtils.makeActionButton("view") { JiraService.openTicketInBrowser(ticket.key) })
     }
 
+    // ── Transition helpers ────────────────────────────────────────────────────
+
+    /** Generic single-step Jira transition; refreshes the card list on success. */
     private fun doTransition(key: String, targetStatus: String) {
         setStatus("$key → $targetStatus…")
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionTicket(key, targetStatus)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → $targetStatus"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → $targetStatus"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
 
+    /**
+     * Smart in-progress transition: mirrors in-progress.sh logic.
+     * To Do → Ready → In Progress; any other status → In Progress directly.
+     */
     private fun doTransitionInProgress(key: String) {
         setStatus("$key → In Progress…")
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.transitionToInProgress(key)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → In Progress"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key → In Progress"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
 
-    private fun doTransitionPendingQa(key: String) {
-        setStatus("$key → Pending QA…")
+    private fun doPickTicket(key: String) {
+        val proj = project
+        if (proj == null) {
+            setStatus("✗ No project context"); return
+        }
+        setStatus("$key: creating branch & transitioning…")
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.transitionToPendingQa(key)
+            val result = JiraService.pickTicket(proj, key)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → Pending QA"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                if (result.isSuccess) {
+                    setStatus("✓ $key: branch created, In Progress"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }
     }
 
-    private fun doTransitionDeployedUat(key: String) {
-        setStatus("$key → Deployed to UAT…")
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.transitionToDeployedUat(key)
-            SwingUtilities.invokeLater {
-                if (result.isSuccess) { setStatus("✓ $key → Deployed to UAT"); refresh() }
-                else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-            }
-        }
+    private fun setStatus(text: String) {
+        statusLabel.text = text
     }
-
-    private fun setStatus(text: String) { statusLabel.text = text }
 
     private fun loadIconAsync(url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
         if (url.isNullOrBlank()) return
         val cached = iconCache[url]
-        if (cached != null) { onLoaded(cached); return }
+        if (cached != null) {
+            onLoaded(cached); return
+        }
         if (iconCache.containsKey(url)) return
         iconCache[url] = null
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -319,6 +447,8 @@ class TicketsPanel : JPanel(BorderLayout()) {
             }
         }
     }
+
+    // ── Badge factory (companion) ─────────────────────────────────────────────
 
     companion object {
         fun makeBadge(text: String, initiallyActive: Boolean): JLabel {
@@ -333,31 +463,67 @@ class TicketsPanel : JPanel(BorderLayout()) {
                     label.putClientProperty("active", label.getClientProperty("active") != true)
                     applyBadgeStyle(label); label.repaint()
                     var p = label.parent
-                    while (p != null) { if (p is TicketsPanel) { p.refresh(); break }; p = p.parent }
+                    while (p != null) {
+                        if (p is TicketsPanel) {
+                            p.refresh(); break
+                        }; p = p.parent
+                    }
                 }
-                override fun mouseEntered(e: MouseEvent) { label.putClientProperty("hovered", true);  applyBadgeStyle(label) }
-                override fun mouseExited(e: MouseEvent)  { label.putClientProperty("hovered", false); applyBadgeStyle(label) }
+
+                override fun mouseEntered(e: MouseEvent) {
+                    label.putClientProperty("hovered", true); applyBadgeStyle(label)
+                }
+
+                override fun mouseExited(e: MouseEvent) {
+                    label.putClientProperty("hovered", false); applyBadgeStyle(label)
+                }
             })
             return label
         }
 
         private fun applyBadgeStyle(label: JLabel) {
-            val active  = label.getClientProperty("active")  == true
+            val active = label.getClientProperty("active") == true
             val hovered = label.getClientProperty("hovered") == true
             when {
-                active  -> { label.background = Color(24, 95, 165);   label.foreground = Color.WHITE;           label.border = JBUI.Borders.empty(3, 8) }
-                hovered -> { label.background = Color(210, 228, 248); label.foreground = Color(24, 95, 165);   label.border = JBUI.Borders.empty(3, 8) }
-                else    -> { label.background = Color(225, 223, 218); label.foreground = Color(110, 108, 103); label.border = JBUI.Borders.empty(3, 8) }
+                active -> {
+                    label.background = Color(24, 95, 165); label.foreground =
+                        Color.WHITE; label.border = JBUI.Borders.empty(3, 8)
+                }
+
+                hovered -> {
+                    label.background = Color(210, 228, 248); label.foreground =
+                        Color(24, 95, 165); label.border = JBUI.Borders.empty(3, 8)
+                }
+
+                else -> {
+                    label.background = Color(225, 223, 218); label.foreground =
+                        Color(110, 108, 103); label.border = JBUI.Borders.empty(3, 8)
+                }
             }
         }
     }
 
     private fun makeStatusBadge(status: String): JLabel {
         val (bg, fg) = when (status) {
-            "In Progress", "Defining AC", "PR Open" -> Pair(Color(230, 241, 251), Color(24, 95, 165))
-            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" -> Pair(Color(234, 243, 222), Color(59, 109, 17))
+            "In Progress", "Defining AC", "PR Open" -> Pair(
+                Color(230, 241, 251),
+                Color(24, 95, 165)
+            )
+
+            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" -> Pair(
+                Color(
+                    234,
+                    243,
+                    222
+                ), Color(59, 109, 17)
+            )
+
             "Blocked", "Failed QA" -> Pair(Color(252, 235, 235), Color(163, 45, 45))
-            "Submitted for Review", "Pending AC Review" -> Pair(Color(250, 238, 218), Color(133, 79, 11))
+            "Submitted for Review", "Pending AC Review" -> Pair(
+                Color(250, 238, 218),
+                Color(133, 79, 11)
+            )
+
             else -> Pair(Color(241, 239, 232), Color(95, 94, 90))
         }
         return JLabel(status).apply {

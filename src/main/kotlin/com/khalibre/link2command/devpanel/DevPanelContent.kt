@@ -12,7 +12,7 @@ import javax.swing.SwingUtilities
 class DevPanelContent(project: Project) : JPanel(BorderLayout()) {
 
     private val prPanel = PrPanel(project)
-    private val ticketsPanel = TicketsPanel()
+    private val ticketsPanel = TicketsPanel(project)
     private val configPanel = ConfigPanel(project)
 
     private val tabs = JBTabbedPane().apply {
