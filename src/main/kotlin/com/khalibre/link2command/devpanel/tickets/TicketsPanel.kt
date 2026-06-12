@@ -465,9 +465,18 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val status = ticket.status
         val isUnassigned = ticket.assigneeName == null
         if (isUnassigned || status == "Failed QA")
-            panel.add(CardUtils.makeActionButton("pick") { runInTerminal("pick-ticket ${ticket.key}") })
-        if (isMe && status in listOf("Deployed to UAT", "Pending QA", "Failed QA", "Merged"))
-            panel.add(CardUtils.makeTransitionButton("in progress") { doTransitionInProgress(ticket.key) })
+            panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
+        if (isMe && status == "Ready for Dev")
+            panel.add(CardUtils.makeTransitionButton("Backlog") { doTransitionBacklog(ticket.key) })
+        if (isMe && status in listOf(
+                "Deployed to UAT",
+                "Pending QA",
+                "Failed QA",
+                "Merged",
+                "Ready for Dev"
+            )
+        )
+            panel.add(CardUtils.makeTransitionButton("In Progress") { doTransitionInProgress(ticket.key) })
         if (isMe && status == "In Progress")
             panel.add(CardUtils.makeTransitionButton("PR Open") {
                 doTransition(
@@ -496,7 +505,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                     "Pending QA"
                 )
             })
-        panel.add(CardUtils.makeActionButton("view") { JiraService.openTicketInBrowser(ticket.key) })
+        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
     }
 
     private fun runInTerminal(command: String) {
@@ -523,6 +532,30 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
                     setStatus("✓ $key → $targetStatus"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+            }
+        }
+    }
+
+    private fun doPickTicket(key: String) {
+        setStatus("$key: creating branch & transitioning…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = JiraService.pickTicket(project, key)
+            SwingUtilities.invokeLater {
+                if (result.isSuccess) {
+                    setStatus("✓ $key: branch created, In Progress"); refresh()
+                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+            }
+        }
+    }
+
+    private fun doTransitionBacklog(key: String) {
+        setStatus("$key → Backlog…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = JiraService.transitionTicket(key, "Backlog")
+            SwingUtilities.invokeLater {
+                if (result.isSuccess) {
+                    setStatus("✓ $key → Backlog"); refresh()
                 } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }

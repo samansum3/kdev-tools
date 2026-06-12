@@ -1,12 +1,10 @@
 package com.khalibre.link2command.devpanel.tickets
 
 import com.google.gson.JsonParser
+import com.intellij.openapi.project.Project
 import com.khalibre.link2command.devpanel.config.DevConfig
 import com.khalibre.link2command.devpanel.pr.PrService
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.*
 
 data class JiraTicket(
     val key: String,
@@ -124,49 +122,49 @@ object JiraService {
         return parseAcliResponse(result.stdout)
     }
 
+    fun assignToMe(ticketKey: String): Result<String> {
+        val result = PrService.runCmd(
+            listOf(
+                "acli", "jira", "workitem", "assign",
+                "--key", ticketKey,
+                "--assignee", "@me", "--yes"
+            )
+        )
+        return if (result.exitCode == 0) Result.success("Assigned")
+        else Result.failure(RuntimeException(result.stderr.take(200)))
+    }
+
+    /**
+     * Mirrors pick-ticket.sh:
+     * 1. git checkout -b <key>
+     * 2. Assign to self via acli
+     * 3. Smart transition to In Progress (To Do → Ready → In Progress, else → In Progress)
+     */
+    fun pickTicket(project: Project, ticketKey: String): Result<String> {
+        // 1. git checkout -b
+        val workDir = project.basePath?.let { java.io.File(it) }
+        val gitResult = PrService.runCmd(listOf("git", "checkout", "-b", ticketKey), workDir)
+        if (gitResult.exitCode != 0)
+            return Result.failure(RuntimeException(gitResult.stderr.ifBlank { "git checkout -b $ticketKey failed" }))
+
+        // 2. Assign to self — best effort, mirrors shell's || warn behaviour
+        assignToMe(ticketKey)
+
+        // 3. Smart transition to In Progress
+        return transitionToInProgress(ticketKey)
+    }
+
     fun currentUserEmail(): String? = DevConfig.load().jira.email.takeIf { it.isNotBlank() }
 
     fun transitionTicket(ticketKey: String, targetStatus: String): Result<String> {
-        val cfg = DevConfig.load()
-        val baseUrl = cfg.jira.base_url.trimEnd('/')
-        val auth = Base64.getEncoder()
-            .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
-        return try {
-            val conn1 =
-                URL("$baseUrl/rest/api/2/issue/$ticketKey/transitions").openConnection() as HttpURLConnection
-            conn1.setRequestProperty("Authorization", "Basic $auth")
-            conn1.setRequestProperty("Accept", "application/json")
-            conn1.connectTimeout = 8_000; conn1.readTimeout = 10_000
-            if (conn1.responseCode != 200)
-                return Result.failure(RuntimeException("Failed to fetch transitions (${conn1.responseCode})"))
-            val transArr = JsonParser.parseString(conn1.inputStream.bufferedReader().readText())
-                .asJsonObject.getAsJsonArray("transitions")
-            val transition = transArr.firstOrNull { el ->
-                el.asJsonObject.getAsJsonObject("to")?.get("name")?.asString?.equals(
-                    targetStatus,
-                    ignoreCase = true
-                ) == true
-            }?.asJsonObject
-                ?: return Result.failure(RuntimeException("Transition to '$targetStatus' not available for $ticketKey"))
-            val conn2 =
-                URL("$baseUrl/rest/api/2/issue/$ticketKey/transitions").openConnection() as HttpURLConnection
-            conn2.requestMethod = "POST"
-            conn2.setRequestProperty("Authorization", "Basic $auth")
-            conn2.setRequestProperty("Content-Type", "application/json")
-            conn2.doOutput = true; conn2.connectTimeout = 8_000; conn2.readTimeout = 10_000
-            conn2.outputStream.write("""{"transition":{"id":"${transition.get("id").asString}"}}""".toByteArray())
-            val code = conn2.responseCode
-            if (code in 200..204) Result.success("$ticketKey → $targetStatus")
-            else Result.failure(
-                RuntimeException(
-                    "Transition failed ($code): ${
-                        conn2.errorStream?.bufferedReader()?.readText()?.take(200)
-                    }"
-                )
+        val result = PrService.runCmd(
+            listOf(
+                "acli", "jira", "workitem", "transition",
+                "--key", ticketKey, "--status", targetStatus, "--yes"
             )
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        )
+        return if (result.exitCode == 0) Result.success("$ticketKey → $targetStatus")
+        else Result.failure(RuntimeException(result.stderr.ifBlank { result.stdout }.take(200)))
     }
 
     fun transitionToInProgress(ticketKey: String): Result<String> {
@@ -195,20 +193,21 @@ object JiraService {
     }
 
     private fun fetchCurrentStatus(ticketKey: String): Result<String> {
-        val cfg = DevConfig.load()
-        val auth = Base64.getEncoder()
-            .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
+        val result = PrService.runCmd(
+            listOf(
+                "acli", "jira", "workitem", "view", ticketKey,
+                "--fields", "status",
+                "--json"
+            )
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank())
+            return Result.failure(RuntimeException(result.stderr.take(200)))
         return try {
-            val conn =
-                URL("${cfg.jira.base_url.trimEnd('/')}/rest/api/2/issue/$ticketKey?fields=status").openConnection() as HttpURLConnection
-            conn.setRequestProperty("Authorization", "Basic $auth")
-            conn.setRequestProperty("Accept", "application/json")
-            conn.connectTimeout = 8_000; conn.readTimeout = 10_000
-            if (conn.responseCode != 200) return Result.failure(RuntimeException("Failed to fetch ticket (${conn.responseCode})"))
+            val item = JsonParser.parseString(result.stdout).let {
+                if (it.isJsonArray) it.asJsonArray.first().asJsonObject else it.asJsonObject
+            }
             Result.success(
-                JsonParser.parseString(conn.inputStream.bufferedReader().readText())
-                    .asJsonObject.getAsJsonObject("fields").getAsJsonObject("status")
-                    .get("name").asString
+                item.getAsJsonObject("fields").getAsJsonObject("status").get("name").asString
             )
         } catch (e: Exception) {
             Result.failure(e)
