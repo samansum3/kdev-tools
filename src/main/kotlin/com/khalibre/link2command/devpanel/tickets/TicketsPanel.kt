@@ -2,11 +2,14 @@ package com.khalibre.link2command.devpanel.tickets
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.CardUtils
+import org.jetbrains.plugins.terminal.TerminalToolWindowFactory
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -18,11 +21,21 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
-    private val badgeMyTasks = makeBadge("my tasks", true)
-    private val badgeHideDone = makeBadge("hide done", true)
-    private val badgeUnassigned = makeBadge("unassigned", false)
-    private val badgeInProgress = makeBadge("in progress", false)
-    private val badgeDeployedUat = makeBadge("deployed to UAT", false)
+    // owner (mutually exclusive — toggling one deactivates the other)
+    private val badgeMyTasks =
+        makeBadge("my tasks", false).also { it.putClientProperty("group", "owner") }
+    private val badgeUnassigned =
+        makeBadge("unassigned", false).also { it.putClientProperty("group", "owner") }
+
+    // status badges
+    private val badgeToDo = makeBadge("To Do", false)
+    private val badgeInProgress = makeBadge("In Progress", false)
+    private val badgePrOpen = makeBadge("PR Open", false)
+    private val badgeMerged = makeBadge("Merged", false)
+    private val badgeDeployedUat = makeBadge("Deployed to UAT", false)
+    private val badgePendingQa = makeBadge("Pending QA", false)
+    private val badgeDone = makeBadge("Done", false)
+    private val badgeHideDone = makeBadge("Hide Done", false)
 
     private val typeNames = listOf(
         "Story", "Epic", "Improvement", "Task", "Sub-task",
@@ -127,12 +140,21 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
 
-        topPanel.add(filterSection("owner", listOf(badgeMyTasks)))
+        topPanel.add(filterSection("owner", listOf(badgeMyTasks, badgeUnassigned)))
         topPanel.add(Box.createVerticalStrut(4))
         topPanel.add(
             filterSection(
                 "status",
-                listOf(badgeHideDone, badgeUnassigned, badgeInProgress, badgeDeployedUat)
+                listOf(
+                    badgeToDo,
+                    badgeInProgress,
+                    badgePrOpen,
+                    badgeMerged,
+                    badgeDeployedUat,
+                    badgePendingQa,
+                    badgeDone,
+                    badgeHideDone
+                )
             )
         )
         topPanel.add(Box.createVerticalStrut(4))
@@ -196,7 +218,7 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 if (currentUserEmail == null) currentUserEmail = JiraService.currentUserEmail()
-                val jql = JiraService.buildJql(filters)
+                val jql = JiraService.buildJql(filters, currentUserEmail)
                 val tickets = JiraService.searchTickets(jql)
                 SwingUtilities.invokeLater {
                     cardsPanel.removeAll()
@@ -238,14 +260,21 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         val activeTypes = typeBadges.zip(typeNames)
             .filter { (badge, _) -> badge.getClientProperty("active") == true }
             .map { (_, name) -> name }.toSet()
+
+        fun active(b: JLabel) = b.getClientProperty("active") == true
         return TicketFilters(
             parentKeys = parentKeys,
             fixVersion = fixVersionField.text.trim(),
-            myTasks = badgeMyTasks.getClientProperty("active") == true,
-            hideDone = badgeHideDone.getClientProperty("active") == true,
-            unassigned = badgeUnassigned.getClientProperty("active") == true,
-            inProgress = badgeInProgress.getClientProperty("active") == true,
-            deployedUat = badgeDeployedUat.getClientProperty("active") == true,
+            myTasks = active(badgeMyTasks),
+            unassigned = active(badgeUnassigned),
+            filterToDo = active(badgeToDo),
+            filterInProgress = active(badgeInProgress),
+            filterPrOpen = active(badgePrOpen),
+            filterMerged = active(badgeMerged),
+            filterDeployedUat = active(badgeDeployedUat),
+            filterPendingQa = active(badgePendingQa),
+            filterDone = active(badgeDone),
+            hideDone = active(badgeHideDone),
             typeFilter = activeTypes
         )
     }
@@ -345,7 +374,7 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         val isUnassigned = ticket.assigneeName == null
         // pick-ticket: git checkout + assign + transition — must run in terminal
         if (isUnassigned || status == "Failed QA")
-            panel.add(CardUtils.makeActionButton("pick") { doPickTicket(ticket.key) })
+            panel.add(CardUtils.makeActionButton("pick") { runInTerminal("pick-ticket ${ticket.key}") })
         // All remaining buttons are pure Jira status transitions — direct API calls
         if (isMe && status in listOf("Deployed to UAT", "Pending QA", "Merged"))
             panel.add(CardUtils.makeTransitionButton("in progress") { doTransitionInProgress(ticket.key) })
@@ -380,6 +409,25 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         panel.add(CardUtils.makeActionButton("view") { JiraService.openTicketInBrowser(ticket.key) })
     }
 
+    /**
+     * Sends [command] to the active terminal tab — used only for pick-ticket
+     * which does git checkout + assign in addition to the Jira transition.
+     */
+    private fun runInTerminal(command: String) {
+        val proj = project ?: return
+        ApplicationManager.getApplication().invokeLater {
+            val toolWindow = ToolWindowManager.getInstance(proj)
+                .getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID) ?: return@invokeLater
+            toolWindow.activate {
+                val selectedContent = toolWindow.contentManager.selectedContent ?: return@activate
+                val tabInfo = TerminalToolWindowTabsManager.getInstance(proj).tabs
+                    .firstOrNull { it.content == selectedContent } ?: return@activate
+                tabInfo.view.component.requestFocusInWindow()
+                tabInfo.view.createSendTextBuilder().shouldExecute().send(command)
+            }
+        }
+    }
+
     // ── Transition helpers ────────────────────────────────────────────────────
 
     /** Generic single-step Jira transition; refreshes the card list on success. */
@@ -411,21 +459,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         }
     }
 
-    private fun doPickTicket(key: String) {
-        val proj = project
-        if (proj == null) {
-            setStatus("✗ No project context"); return
-        }
-        setStatus("$key: creating branch & transitioning…")
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.pickTicket(proj, key)
-            SwingUtilities.invokeLater {
-                if (result.isSuccess) {
-                    setStatus("✓ $key: branch created, In Progress"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-            }
-        }
-    }
 
     private fun setStatus(text: String) {
         statusLabel.text = text
@@ -448,6 +481,17 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         }
     }
 
+    /** Deactivates all badges in [group] except [except]. Called when a grouped badge is activated. */
+    fun deactivateGroupExcept(group: String, except: JLabel) {
+        listOf(badgeMyTasks, badgeUnassigned)
+            .filter { it != except && it.getClientProperty("group") == group }
+            .forEach {
+                it.putClientProperty("active", false)
+                TicketsPanel.applyBadgeStyle(it)
+                it.repaint()
+            }
+    }
+
     // ── Badge factory (companion) ─────────────────────────────────────────────
 
     companion object {
@@ -460,8 +504,21 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             applyBadgeStyle(label)
             label.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
-                    label.putClientProperty("active", label.getClientProperty("active") != true)
+                    val nowActive = label.getClientProperty("active") != true
+                    label.putClientProperty("active", nowActive)
                     applyBadgeStyle(label); label.repaint()
+                    // Mutual exclusion: deactivate sibling badges in the same group
+                    val group = label.getClientProperty("group") as? String
+                    if (nowActive && group != null) {
+                        var p = label.parent
+                        while (p != null) {
+                            if (p is TicketsPanel) {
+                                p.deactivateGroupExcept(group, label)
+                                break
+                            }
+                            p = p.parent
+                        }
+                    }
                     var p = label.parent
                     while (p != null) {
                         if (p is TicketsPanel) {
@@ -481,7 +538,7 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             return label
         }
 
-        private fun applyBadgeStyle(label: JLabel) {
+        internal fun applyBadgeStyle(label: JLabel) {
             val active = label.getClientProperty("active") == true
             val hovered = label.getClientProperty("hovered") == true
             when {

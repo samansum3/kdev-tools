@@ -1,8 +1,9 @@
 package com.khalibre.link2command.devpanel.tickets
 
 import com.google.gson.JsonParser
-import com.intellij.openapi.project.Project
 import com.khalibre.link2command.devpanel.config.DevConfig
+import com.khalibre.link2command.devpanel.pr.PrService
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.*
@@ -22,80 +23,71 @@ data class JiraTicket(
 data class TicketFilters(
     val parentKeys: List<String> = emptyList(),
     val fixVersion: String = "",
+    // owner (mutually exclusive)
     val myTasks: Boolean = false,
-    val hideDone: Boolean = true,
     val unassigned: Boolean = false,
-    val isTodo: Boolean = false,
-    val inProgress: Boolean = false,
-    val deployedUat: Boolean = false,
+    // status badges — each maps directly to a Jira status
+    val filterToDo: Boolean = false,
+    val filterInProgress: Boolean = false,
+    val filterPrOpen: Boolean = false,
+    val filterMerged: Boolean = false,
+    val filterDeployedUat: Boolean = false,
+    val filterPendingQa: Boolean = false,
+    val filterDone: Boolean = false,
+    // hide-done modifier (only applied when no explicit status badges are active)
+    val hideDone: Boolean = false,
     val typeFilter: Set<String> = emptySet()
 )
 
 object JiraService {
 
-    // Mirrors build-jql.sh DONE_STATUSES / DONE_STATUSES_NO_MERGED
     private val DONE_STATUSES = listOf("Done", "Closed", "Resolved", "Merged", "Pending Release")
     private val DONE_STATUSES_NO_MERGED = listOf("Done", "Closed", "Resolved", "Pending Release")
 
-    // Mirrors jql_not_done()
     private fun jqlNotDone() =
         "status NOT IN (${DONE_STATUSES.joinToString(",") { "\"$it\"" }})"
 
-    // Mirrors jql_not_done_no_merged()
     private fun jqlNotDoneNoMerged() =
         "status NOT IN (${DONE_STATUSES_NO_MERGED.joinToString(",") { "\"$it\"" }})"
 
-    // Mirrors jql_unassigned_or_failed_qa()
-    private fun jqlUnassignedOrFailedQa() =
-        "((assignee is EMPTY AND ${jqlNotDone()}) OR status = \"Failed QA\")"
-
-    // Mirrors jql_hide_done_clause()
     private fun jqlHideDoneClause() =
         "(${jqlNotDone()} OR (type != \"Sub-task\" AND ${jqlNotDoneNoMerged()}))"
 
-    /**
-     * Mirrors build-jql.sh build_jql() logic exactly.
-     *
-     * Default (no flags) → unassigned-or-failed-QA  (same as subtasks.sh default)
-     * --hide-done        → hide-done clause
-     * --all / show-all   → no status filter
-     * --mine             → assignee = currentUser()
-     * --unassigned       → assignee is EMPTY
-     * explicit statuses  → status IN (...)
-     * --for-dev is implicit: non-dev types excluded when fixVersion is used
-     */
-    fun buildJql(filters: TicketFilters): String {
+    fun buildJql(filters: TicketFilters, currentUserEmail: String?): String {
         val clauses = mutableListOf<String>()
 
+        // Scope: parent keys OR fix version (combined with OR, not separate AND clauses)
+        val scopeParts = mutableListOf<String>()
         if (filters.parentKeys.isNotEmpty())
-            clauses += "parent in (${filters.parentKeys.joinToString(",") { "\"$it\"" }})"
+            scopeParts += "parent in (${filters.parentKeys.joinToString(",") { "\"$it\"" }})"
         if (filters.fixVersion.isNotBlank())
-            clauses += "fixVersion = ${filters.fixVersion}"
+            scopeParts += "fixVersion = ${filters.fixVersion}"
+        if (scopeParts.isNotEmpty())
+            clauses += if (scopeParts.size == 1) scopeParts[0] else "(${scopeParts.joinToString(" OR ")})"
 
-        val hasExplicitStatus = filters.inProgress || filters.deployedUat
-        val hasAssigneeFilter = filters.myTasks || filters.unassigned   // ← new
+        // Owner filter — mutually exclusive, never both
+        if (filters.myTasks) clauses += "assignee = currentUser()"
+        if (filters.unassigned) clauses += "assignee is EMPTY"
+
+        // Status filter — only when at least one badge is active
+        val activeStatuses = mutableListOf<String>()
+        if (filters.filterToDo) activeStatuses += "To Do"
+        if (filters.filterInProgress) activeStatuses += "In Progress"
+        if (filters.filterPrOpen) activeStatuses += "PR Open"
+        if (filters.filterMerged) activeStatuses += "Merged"
+        if (filters.filterDeployedUat) activeStatuses += "Deployed to UAT"
+        if (filters.filterPendingQa) activeStatuses += "Pending QA"
+        if (filters.filterDone) activeStatuses += "Done"
 
         when {
-            hasExplicitStatus -> {
-                val statuses = mutableListOf<String>()
-                if (filters.inProgress) statuses += "In Progress"
-                if (filters.deployedUat) statuses += "Deployed to UAT"
-                clauses += "status IN (${statuses.joinToString(",") { "\"$it\"" }})"
-            }
+            activeStatuses.isNotEmpty() ->
+                clauses += "status IN (${activeStatuses.joinToString(",") { "\"$it\"" }})"
 
             filters.hideDone -> clauses += jqlHideDoneClause()
-            // Only apply the default unassigned-or-failed-QA when no explicit assignee
-            // filter is active — otherwise currentUser() + assignee is EMPTY = 0 results
-            !hasAssigneeFilter -> clauses += jqlUnassignedOrFailedQa()
-            // hasAssigneeFilter without hideDone/explicitStatus → no status clause (show all)
+            // No status badges active → no status clause at all
         }
 
-        if (filters.unassigned) clauses += "assignee is EMPTY"
-        if (filters.myTasks) clauses += "assignee = currentUser()"
-
-        if (filters.fixVersion.isNotBlank())
-            clauses += "type not in (\"Operations\", \"Test Report\", \"Release Procedure\", \"Translation Update\")"
-
+        // Type filter — only when at least one type badge is active
         if (filters.typeFilter.isNotEmpty())
             clauses += "type IN (${filters.typeFilter.joinToString(",") { "\"$it\"" }})"
 
@@ -103,88 +95,25 @@ object JiraService {
         return if (jql.isBlank()) "ORDER BY created ASC" else "$jql ORDER BY created ASC"
     }
 
-    /** PUT /rest/api/2/issue/<key>/assignee  with accountId = null means "assign to current user"
-     *  Jira Cloud accepts {"accountId": null} to assign to the authenticated user's own account,
-     *  but the reliable way is to first resolve our own accountId then assign it. */
-    fun assignToMe(ticketKey: String): Result<String> {
-        val cfg = DevConfig.load()
-        val baseUrl = cfg.jira.base_url.trimEnd('/')
-        val auth = Base64.getEncoder()
-            .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
-        return try {
-            // 1. Resolve current user's accountId via /rest/api/3/myself
-            val meConn = URL("$baseUrl/rest/api/3/myself").openConnection() as HttpURLConnection
-            meConn.setRequestProperty("Authorization", "Basic $auth")
-            meConn.setRequestProperty("Accept", "application/json")
-            meConn.connectTimeout = 8_000; meConn.readTimeout = 10_000
-            if (meConn.responseCode != 200)
-                return Result.failure(RuntimeException("Could not resolve current user (${meConn.responseCode})"))
-            val accountId = JsonParser.parseString(meConn.inputStream.bufferedReader().readText())
-                .asJsonObject.get("accountId").asString
-
-            // 2. Assign
-            val conn =
-                URL("$baseUrl/rest/api/2/issue/$ticketKey/assignee").openConnection() as HttpURLConnection
-            conn.requestMethod = "PUT"
-            conn.setRequestProperty("Authorization", "Basic $auth")
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true; conn.connectTimeout = 8_000; conn.readTimeout = 10_000
-            conn.outputStream.write("""{"accountId":"$accountId"}""".toByteArray())
-            val code = conn.responseCode
-            if (code in 200..204) Result.success(accountId)
-            else Result.failure(RuntimeException("Assign failed ($code)"))
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Mirrors new-ticket.sh / pick-ticket.sh:
-     *  1. git checkout -b <key>
-     *  2. Assign ticket to self
-     *  3. Transition to In Progress (smart: To Do → Ready → In Progress)
-     */
-    fun pickTicket(project: Project, ticketKey: String): Result<String> {
-        // 1. git checkout -b
-        val workDir = project.basePath?.let { java.io.File(it) }
-        val gitResult = com.khalibre.link2command.devpanel.pr.PrService.runCmd(
-            listOf("git", "checkout", "-b", ticketKey), workDir
-        )
-        if (gitResult.exitCode != 0)
-            return Result.failure(RuntimeException(gitResult.stderr.ifBlank { "git checkout -b $ticketKey failed" }))
-
-        // 2. Assign to self (best-effort — don't fail the whole operation)
-        assignToMe(ticketKey)   // ignore result, mirrors shell's || warn behaviour
-
-        // 3. Transition to In Progress
-        return transitionToInProgress(ticketKey)
-    }
-
     fun searchTickets(jql: String): List<JiraTicket> {
-        val cfg = DevConfig.load()
-        val baseUrl = cfg.jira.base_url.trimEnd('/')
-        val email = cfg.jira.email
-        val token = cfg.jira.api_token
-        if (baseUrl.isBlank() || email.isBlank() || token.isBlank())
-            throw RuntimeException("Jira not configured. Please fill in Base URL, email, and API token in Config.")
-        val auth = Base64.getEncoder().encodeToString("$email:$token".toByteArray())
-        val url = URL("$baseUrl/rest/api/3/search/jql")
-        val requestBody = """{"jql":"${
-            jql.replace("\\", "\\\\").replace("\"", "\\\"")
-        }", "fields":["summary","status","assignee","issuetype","priority"], "maxResults":200}"""
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Authorization", "Basic $auth")
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Accept", "application/json")
-        conn.doOutput = true; conn.connectTimeout = 10_000; conn.readTimeout = 15_000
-        conn.outputStream.use { it.write(requestBody.toByteArray()) }
-        val responseCode = conn.responseCode
-        if (responseCode != 200) {
-            val err = conn.errorStream?.bufferedReader()?.readText() ?: ""
-            throw RuntimeException("Jira API error $responseCode: ${err.take(200)}")
-        }
-        return parseSearchResponse(conn.inputStream.bufferedReader().readText())
+        // Use acli via PrService.runCmd — inherits correct PATH, separates stdout/stderr
+        val result = PrService.runCmd(
+            listOf(
+                "acli", "jira", "workitem", "search",
+                "--jql", jql,
+                "--fields", "summary,status,assignee,issuetype,priority",
+                "--json", "--limit", "200"
+            )
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank())
+            throw RuntimeException(
+                "acli error: ${
+                    result.stderr.take(200).ifBlank { result.stdout.take(200) }
+                        .ifBlank { "no output" }
+                }"
+            )
+        File("/tmp/result.json").writeText(result.stdout)
+        return parseAcliResponse(result.stdout)
     }
 
     fun currentUserEmail(): String? = DevConfig.load().jira.email.takeIf { it.isNotBlank() }
@@ -283,23 +212,45 @@ object JiraService {
         }
     }
 
+    /** Parses acli --json output: a raw JSON array [{key, fields:{...}}, ...] */
+    private fun parseAcliResponse(body: String): List<JiraTicket> {
+        val root = JsonParser.parseString(body)
+        val issues = if (root.isJsonArray) root.asJsonArray
+        else root.asJsonObject.getAsJsonArray("issues") ?: return emptyList()
+        return parseIssueArray(issues)
+    }
+
     private fun parseSearchResponse(body: String): List<JiraTicket> {
         val issues =
             JsonParser.parseString(body).asJsonObject.getAsJsonArray("issues") ?: return emptyList()
+        return parseIssueArray(issues)
+    }
+
+    private fun parseIssueArray(issues: com.google.gson.JsonArray): List<JiraTicket> {
         return issues.mapNotNull { el ->
             try {
                 val obj = el.asJsonObject
                 val key = obj.get("key").asString
                 val fields = obj.getAsJsonObject("fields")
+
+                val assigneeEl = fields.get("assignee")
+                val assignee =
+                    if (assigneeEl != null && !assigneeEl.isJsonNull) assigneeEl.asJsonObject else null
+
+                val issueTypeEl = fields.get("issuetype")
+                val issueTypeObj =
+                    if (issueTypeEl != null && !issueTypeEl.isJsonNull) issueTypeEl.asJsonObject else null
+
+                val priorityEl = fields.get("priority")
+                val priorityObj =
+                    if (priorityEl != null && !priorityEl.isJsonNull) priorityEl.asJsonObject else null
+
                 val summary = fields.get("summary")?.asString ?: "(no summary)"
                 val status = fields.getAsJsonObject("status")?.get("name")?.asString ?: "Unknown"
-                val assignee = fields.getAsJsonObject("assignee")
                 val assigneeName = assignee?.get("displayName")?.asString
                 val assigneeEmail = assignee?.get("emailAddress")?.asString
-                val issueTypeObj = fields.getAsJsonObject("issuetype")
                 val issueType = issueTypeObj?.get("name")?.asString
                 val issueTypeIconUrl = issueTypeObj?.get("iconUrl")?.asString
-                val priorityObj = fields.getAsJsonObject("priority")
                 val priority = priorityObj?.get("name")?.asString
                 val priorityIconUrl = priorityObj?.get("iconUrl")?.asString
                 JiraTicket(
