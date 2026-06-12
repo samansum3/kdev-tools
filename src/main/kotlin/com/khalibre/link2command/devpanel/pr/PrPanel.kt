@@ -297,7 +297,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun buildPrCard(pr: PullRequest, repo: String): JPanel {
-        val card = CardUtils.makeCard()
+        val card = CardUtils.makeCard("${pr.number}", "pr")
         val gbc = CardUtils.cardGbc()
 
         val titlePanel = JPanel(GridBagLayout()).apply {

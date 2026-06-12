@@ -38,15 +38,45 @@ object CardUtils {
     fun makeTransitionButton(targetStatus: String, action: () -> Unit): JButton =
         makeActionButton("→ $targetStatus", action)
 
-    fun makeCard(): JPanel {
+    // Per-group selection state — key is a group tag (e.g. "tickets", "pr"), value is the selected card key
+    private val selectedCards = mutableMapOf<String, JPanel?>()
+    private val selectedKeys = mutableMapOf<String, String?>()
+
+    fun makeCard(ticketKey: String? = null, group: String = "default"): JPanel {
+        val normalBorder = CompoundBorder(
+            javax.swing.BorderFactory.createLineBorder(
+                JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1, true
+            ),
+            JBUI.Borders.empty(8, 10)
+        )
+        val selectedBorder = CompoundBorder(
+            javax.swing.BorderFactory.createLineBorder(Color(24, 95, 165), 2, true),
+            JBUI.Borders.empty(7, 9)  // 1px less to compensate for thicker border
+        )
         return JPanel(GridBagLayout()).apply {
-            border = CompoundBorder(
-                javax.swing.BorderFactory.createLineBorder(
-                    JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1, true
-                ),
-                JBUI.Borders.empty(8, 10)
-            )
+            putClientProperty("ticketKey", ticketKey)
+            putClientProperty("group", group)
+            border =
+                if (ticketKey != null && ticketKey == selectedKeys[group]) selectedBorder else normalBorder
             alignmentX = Component.LEFT_ALIGNMENT
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(object : MouseAdapter() {
+                override fun mousePressed(e: MouseEvent) {
+                    val g = getClientProperty("group") as? String ?: "default"
+                    // Deselect previously selected card in same group
+                    selectedCards[g]?.let { prev ->
+                        if (prev !== this@apply) {
+                            prev.border = normalBorder
+                            prev.repaint()
+                        }
+                    }
+                    // Select this card
+                    selectedCards[g] = this@apply
+                    selectedKeys[g] = getClientProperty("ticketKey") as? String
+                    border = selectedBorder
+                    repaint()
+                }
+            })
         }
     }
 

@@ -374,7 +374,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // ── Card builder ─────────────────────────────────────────────────────────
 
     private fun buildTicketCard(ticket: JiraTicket): JPanel {
-        val card = CardUtils.makeCard()
+        val card = CardUtils.makeCard(ticket.key, "tickets")
         val gbc = CardUtils.cardGbc()
 
         // ── Row 0: key + truncating summary ──────────────────────────────────
