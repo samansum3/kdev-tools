@@ -1,5 +1,6 @@
 package com.khalibre.link2command.devpanel.tickets
 
+import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
@@ -14,6 +15,7 @@ import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.*
 
 class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
@@ -68,10 +70,18 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var currentUserEmail: String? = null
     private val iconCache = mutableMapOf<String, ImageIcon?>()
 
+    // Debounce: fires 300 ms after the last badge toggle
+    private var debounceTimer: javax.swing.Timer? = null
+    private val DEBOUNCE_MS = 300
+
+    // Stale-request guard: only the response matching the latest generation is applied
+    private val requestGeneration = AtomicLong(0)
+
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
         loadFromGitCw()
+        onFilterBadgeChanged() // sync header count after badge restore
     }
 
     // ── .git/cw persistence ──────────────────────────────────────────────────
@@ -104,6 +114,34 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             val v = versionFile.readText().trim()
             if (v.isNotBlank()) fixVersionField.text = v
         }
+
+        // Restore filter badge state
+        val filtersFile = File(cw, "filters.json")
+        if (filtersFile.exists()) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val map = Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
+                fun restore(badge: JLabel, key: String) {
+                    val active = map[key] ?: false
+                    badge.putClientProperty("active", active)
+                    applyBadgeStyle(badge)
+                }
+                restore(badgeMyTasks,     "myTasks")
+                restore(badgeUnassigned,  "unassigned")
+                restore(badgeToDo,        "toDo")
+                restore(badgeReadyForDev, "readyForDev")
+                restore(badgeInProgress,  "inProgress")
+                restore(badgePrOpen,      "prOpen")
+                restore(badgeMerged,      "merged")
+                restore(badgeDeployedUat, "deployedUat")
+                restore(badgePendingQa,   "pendingQa")
+                restore(badgeFailedQa,    "failedQa")
+                restore(badgeDone,        "done")
+                restore(badgeHideDone,    "hideDone")
+                typeBadges.zip(typeNames).forEach    { (b, n) -> restore(b, "type_$n") }
+                notTypeBadges.zip(typeNames).forEach { (b, n) -> restore(b, "notType_$n") }
+            } catch (_: Exception) { /* ignore corrupt file */ }
+        }
     }
 
     private fun saveToGitCw() {
@@ -121,6 +159,26 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         if (ver.isNotBlank()) {
             File(cw, "fix-version").writeText(ver)
         }
+
+        // Persist filter badge state
+        fun active(b: JLabel) = b.getClientProperty("active") == true
+        val map = mutableMapOf(
+            "myTasks"     to active(badgeMyTasks),
+            "unassigned"  to active(badgeUnassigned),
+            "toDo"        to active(badgeToDo),
+            "readyForDev" to active(badgeReadyForDev),
+            "inProgress"  to active(badgeInProgress),
+            "prOpen"      to active(badgePrOpen),
+            "merged"      to active(badgeMerged),
+            "deployedUat" to active(badgeDeployedUat),
+            "pendingQa"   to active(badgePendingQa),
+            "failedQa"    to active(badgeFailedQa),
+            "done"        to active(badgeDone),
+            "hideDone"    to active(badgeHideDone)
+        )
+        typeBadges.zip(typeNames).forEach    { (b, n) -> map["type_$n"]    = active(b) }
+        notTypeBadges.zip(typeNames).forEach { (b, n) -> map["notType_$n"] = active(b) }
+        try { File(cw, "filters.json").writeText(Gson().toJson(map)) } catch (_: Exception) {}
     }
 
     // ── UI construction ───────────────────────────────────────────────────────
@@ -280,24 +338,38 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // ── Refresh / data loading ────────────────────────────────────────────────
 
+    /**
+     * Debounced refresh — waits DEBOUNCE_MS after the last call before firing.
+     * Called from badge click handlers and input fields.
+     */
     fun refresh() {
+        debounceTimer?.stop()
+        debounceTimer = javax.swing.Timer(DEBOUNCE_MS) { doRefresh() }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    /** Actual fetch — generation-guarded so stale responses are discarded. */
+    private fun doRefresh() {
         val filters = buildFilters()
 
         if (filters.parentKeys.isEmpty() && filters.fixVersion.isBlank()) {
-            SwingUtilities.invokeLater {
-                cardsPanel.removeAll()
-                cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s) or a fix version to load tickets.</i></html>").apply {
-                    border = JBUI.Borders.empty(16, 4)
-                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                })
-                cardsPanel.revalidate(); cardsPanel.repaint()
-                setStatus("")
-            }
+            cardsPanel.removeAll()
+            cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s) or a fix version to load tickets.</i></html>").apply {
+                border = JBUI.Borders.empty(16, 4)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            })
+            cardsPanel.revalidate(); cardsPanel.repaint()
+            setStatus("")
             return
         }
 
         saveToGitCw()
-        setStatus("Loading…")
+        setStatus("Loading...")
+
+        // Each call gets a unique generation; stale responses are ignored
+        val myGeneration = requestGeneration.incrementAndGet()
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
@@ -305,6 +377,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 val jql = JiraService.buildJql(filters, currentUserEmail)
                 val tickets = JiraService.searchTickets(jql)
                 SwingUtilities.invokeLater {
+                    if (requestGeneration.get() != myGeneration) return@invokeLater
                     cardsPanel.removeAll()
                     if (tickets.isEmpty()) {
                         cardsPanel.add(JBLabel("No tickets found").apply {
@@ -326,6 +399,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
+                    if (requestGeneration.get() != myGeneration) return@invokeLater
                     setStatus("Error: ${e.message?.take(80)}")
                     cardsPanel.removeAll()
                     cardsPanel.add(JBLabel("<html>${CardUtils.escHtml(e.message ?: "Unknown error")}</html>").apply {
