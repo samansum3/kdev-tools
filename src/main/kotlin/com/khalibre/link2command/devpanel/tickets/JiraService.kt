@@ -28,15 +28,18 @@ data class TicketFilters(
     val unassigned: Boolean = false,
     // status badges — each maps directly to a Jira status
     val filterToDo: Boolean = false,
+    val filterReadyForDev: Boolean = false,
     val filterInProgress: Boolean = false,
     val filterPrOpen: Boolean = false,
     val filterMerged: Boolean = false,
     val filterDeployedUat: Boolean = false,
     val filterPendingQa: Boolean = false,
+    val filterFailedQa: Boolean = false,
     val filterDone: Boolean = false,
     // hide-done modifier (only applied when no explicit status badges are active)
     val hideDone: Boolean = false,
-    val typeFilter: Set<String> = emptySet()
+    val typeFilter: Set<String> = emptySet(),
+    val notTypeFilter: Set<String> = emptySet()
 )
 
 object JiraService {
@@ -72,11 +75,13 @@ object JiraService {
         // Status filter — only when at least one badge is active
         val activeStatuses = mutableListOf<String>()
         if (filters.filterToDo) activeStatuses += "To Do"
+        if (filters.filterReadyForDev) activeStatuses += "Ready for Dev"
         if (filters.filterInProgress) activeStatuses += "In Progress"
         if (filters.filterPrOpen) activeStatuses += "PR Open"
         if (filters.filterMerged) activeStatuses += "Merged"
         if (filters.filterDeployedUat) activeStatuses += "Deployed to UAT"
         if (filters.filterPendingQa) activeStatuses += "Pending QA"
+        if (filters.filterFailedQa) activeStatuses += "Failed QA"
         if (filters.filterDone) activeStatuses += "Done"
 
         when {
@@ -87,16 +92,19 @@ object JiraService {
             // No status badges active → no status clause at all
         }
 
-        // Type filter — only when at least one type badge is active
+        // Type include filter
         if (filters.typeFilter.isNotEmpty())
             clauses += "type IN (${filters.typeFilter.joinToString(",") { "\"$it\"" }})"
+
+        // Type exclude filter
+        if (filters.notTypeFilter.isNotEmpty())
+            clauses += "type NOT IN (${filters.notTypeFilter.joinToString(",") { "\"$it\"" }})"
 
         val jql = clauses.joinToString(" AND ")
         return if (jql.isBlank()) "ORDER BY created ASC" else "$jql ORDER BY created ASC"
     }
 
     fun searchTickets(jql: String): List<JiraTicket> {
-        // Use acli via PrService.runCmd — inherits correct PATH, separates stdout/stderr
         val result = PrService.runCmd(
             listOf(
                 "acli", "jira", "workitem", "search",
@@ -112,7 +120,7 @@ object JiraService {
                         .ifBlank { "no output" }
                 }"
             )
-        File("/tmp/result.json").writeText(result.stdout)
+        File("/tmp/result.json").writeText(result.stdout) // Debug output
         return parseAcliResponse(result.stdout)
     }
 
@@ -166,13 +174,8 @@ object JiraService {
         return when (current) {
             "In Progress" -> Result.success("Already In Progress")
             "To Do" -> {
-                transitionTicket(
-                    ticketKey,
-                    "Ready"
-                ).getOrElse { return Result.failure(it) }; transitionTicket(
-                    ticketKey,
-                    "In Progress"
-                )
+                transitionTicket(ticketKey, "Ready").getOrElse { return Result.failure(it) }
+                transitionTicket(ticketKey, "In Progress")
             }
 
             else -> transitionTicket(ticketKey, "In Progress")
@@ -212,17 +215,10 @@ object JiraService {
         }
     }
 
-    /** Parses acli --json output: a raw JSON array [{key, fields:{...}}, ...] */
     private fun parseAcliResponse(body: String): List<JiraTicket> {
         val root = JsonParser.parseString(body)
         val issues = if (root.isJsonArray) root.asJsonArray
         else root.asJsonObject.getAsJsonArray("issues") ?: return emptyList()
-        return parseIssueArray(issues)
-    }
-
-    private fun parseSearchResponse(body: String): List<JiraTicket> {
-        val issues =
-            JsonParser.parseString(body).asJsonObject.getAsJsonArray("issues") ?: return emptyList()
         return parseIssueArray(issues)
     }
 
@@ -250,23 +246,24 @@ object JiraService {
                 val assigneeName = assignee?.get("displayName")?.asString
                 val assigneeEmail = assignee?.get("emailAddress")?.asString
                 val issueType = issueTypeObj?.get("name")?.asString
-                val issueTypeIconUrl = issueTypeObj?.get("iconUrl")?.asString
+                val issueTypeIconUrl = fixIconUrl(issueTypeObj?.get("iconUrl")?.asString)
                 val priority = priorityObj?.get("name")?.asString
-                val priorityIconUrl = priorityObj?.get("iconUrl")?.asString
+                val priorityIconUrl = fixIconUrl(priorityObj?.get("iconUrl")?.asString)
                 JiraTicket(
-                    key,
-                    summary,
-                    status,
-                    assigneeName,
-                    assigneeEmail,
-                    issueType,
-                    issueTypeIconUrl,
-                    priority,
-                    priorityIconUrl
+                    key, summary, status,
+                    assigneeName, assigneeEmail,
+                    issueType, issueTypeIconUrl,
+                    priority, priorityIconUrl
                 )
             } catch (e: Exception) {
                 null
             }
         }
     }
+
+    private fun fixIconUrl(url: String?) =
+        url?.replace(
+            "https://jira-prod-ap-18-2.prod.atl-paas.net",
+            "https://khalibre.atlassian.net"
+        )
 }

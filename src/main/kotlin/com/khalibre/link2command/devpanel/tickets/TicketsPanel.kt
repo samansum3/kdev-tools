@@ -23,17 +23,19 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
 
     // owner (mutually exclusive — toggling one deactivates the other)
     private val badgeMyTasks =
-        makeBadge("my tasks", false).also { it.putClientProperty("group", "owner") }
+        makeBadge("My Tasks", false).also { it.putClientProperty("group", "owner") }
     private val badgeUnassigned =
-        makeBadge("unassigned", false).also { it.putClientProperty("group", "owner") }
+        makeBadge("Unassigned", false).also { it.putClientProperty("group", "owner") }
 
     // status badges
     private val badgeToDo = makeBadge("To Do", false)
+    private val badgeReadyForDev = makeBadge("Ready for Dev", false)
     private val badgeInProgress = makeBadge("In Progress", false)
     private val badgePrOpen = makeBadge("PR Open", false)
     private val badgeMerged = makeBadge("Merged", false)
     private val badgeDeployedUat = makeBadge("Deployed to UAT", false)
     private val badgePendingQa = makeBadge("Pending QA", false)
+    private val badgeFailedQa = makeBadge("Failed QA", false)
     private val badgeDone = makeBadge("Done", false)
     private val badgeHideDone = makeBadge("Hide Done", false)
 
@@ -42,6 +44,20 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         "Bug", "Defect", "Operations", "Test Report", "Release Procedure", "Translation Update"
     )
     private val typeBadges = typeNames.map { makeBadge(it, false) }
+    private val notTypeBadges = typeNames.map { makeBadge(it, false) }
+
+    // All filter badges in one flat list — used for active-count computation
+    private val allFilterBadges: List<JLabel>
+        get() = listOf(
+            badgeMyTasks, badgeUnassigned,
+            badgeToDo, badgeReadyForDev, badgeInProgress, badgePrOpen, badgeMerged,
+            badgeDeployedUat, badgePendingQa, badgeFailedQa, badgeDone, badgeHideDone
+        ) + typeBadges + notTypeBadges
+
+    // Collapse state
+    private var filtersExpanded = true
+    private lateinit var filterToggleLabel: JLabel
+    private lateinit var filtersBody: JPanel
 
     private val cardsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
     private val statusLabel = JBLabel("").apply {
@@ -55,12 +71,11 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
-        loadFromGitCw()   // populate fields from .git/cw/ on open
+        loadFromGitCw()
     }
 
     // ── .git/cw persistence ──────────────────────────────────────────────────
 
-    /** Resolve the git root of the current project, or null. */
     private fun gitRoot(): File? {
         val base = project?.basePath ?: return null
         var dir = File(base)
@@ -73,7 +88,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
 
     private fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
 
-    /** Read .git/cw/parent-tickets (one key per line) and .git/cw/fix-version */
     private fun loadFromGitCw() {
         val cw = cwDir() ?: return
         val parentFile = File(cw, "parent-tickets")
@@ -92,7 +106,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         }
     }
 
-    /** Persist current field values back to .git/cw/ */
     private fun saveToGitCw() {
         val cw = cwDir() ?: return
         cw.mkdirs()
@@ -122,6 +135,7 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             })
         }
 
+        // ── Input row ────────────────────────────────────────────────────────
         val inputRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 54)
         }
@@ -140,26 +154,9 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
 
-        topPanel.add(filterSection("owner", listOf(badgeMyTasks, badgeUnassigned)))
+        // ── Collapsible filter block ─────────────────────────────────────────
+        topPanel.add(buildCollapsibleFilters())
         topPanel.add(Box.createVerticalStrut(4))
-        topPanel.add(
-            filterSection(
-                "status",
-                listOf(
-                    badgeToDo,
-                    badgeInProgress,
-                    badgePrOpen,
-                    badgeMerged,
-                    badgeDeployedUat,
-                    badgePendingQa,
-                    badgeDone,
-                    badgeHideDone
-                )
-            )
-        )
-        topPanel.add(Box.createVerticalStrut(4))
-        topPanel.add(filterSection("type", typeBadges))
-        topPanel.add(Box.createVerticalStrut(6))
         topPanel.add(statusLabel)
         topPanel.add(Box.createVerticalStrut(4))
 
@@ -181,15 +178,103 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         fixVersionField.addActionListener { refresh() }
     }
 
+    /**
+     * Builds the collapsible "Filters" section.
+     * Header row: "Filters (N)  ▾" — clicking anywhere on it toggles the body.
+     * Body: the four filter subsections (owner, status, type, not type).
+     */
+    private fun buildCollapsibleFilters(): JPanel {
+        val container = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
+        }
+
+        // ── Header ───────────────────────────────────────────────────────────
+        filterToggleLabel = JLabel(filterHeaderText()).apply {
+            font = font.deriveFont(Font.BOLD, font.size.toFloat())
+            foreground = JBUI.CurrentTheme.Label.foreground()
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            border = JBUI.Borders.empty(2, 0)
+        }
+
+        val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
+            maximumSize = Dimension(Int.MAX_VALUE, filterToggleLabel.preferredSize.height + 6)
+            add(filterToggleLabel)
+        }
+
+        // Toggle on click anywhere in headerRow
+        val toggleListener = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = toggleFilters()
+            override fun mouseEntered(e: MouseEvent) {
+                filterToggleLabel.foreground = Color(24, 95, 165)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                filterToggleLabel.foreground = JBUI.CurrentTheme.Label.foreground()
+            }
+        }
+        filterToggleLabel.addMouseListener(toggleListener)
+        headerRow.addMouseListener(toggleListener)
+
+        container.add(headerRow)
+        container.add(Box.createVerticalStrut(4))
+
+        // ── Body (the four sections) ─────────────────────────────────────────
+        filtersBody = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
+        }
+        filtersBody.add(filterSection("owner", listOf(badgeMyTasks, badgeUnassigned)))
+        filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody.add(
+            filterSection(
+                "status",
+                listOf(
+                    badgeToDo, badgeReadyForDev, badgeInProgress, badgePrOpen, badgeMerged,
+                    badgeDeployedUat, badgePendingQa, badgeFailedQa, badgeDone, badgeHideDone
+                )
+            )
+        )
+        filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody.add(filterSection("type", typeBadges))
+        filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody.add(filterSection("not type", notTypeBadges))
+
+        container.add(filtersBody)
+        return container
+    }
+
+    private fun toggleFilters() {
+        filtersExpanded = !filtersExpanded
+        filtersBody.isVisible = filtersExpanded
+        filterToggleLabel.text = filterHeaderText()
+        // Force the top panel to recompute its preferred size
+        filtersBody.revalidate()
+        parent?.revalidate()
+        parent?.repaint()
+    }
+
+    /** "Filters (N)  ▾" or "Filters (N)  ▸" depending on expand state. */
+    private fun filterHeaderText(): String {
+        val count = allFilterBadges.count { it.getClientProperty("active") == true }
+        val countStr = if (count > 0) " ($count)" else ""
+        val caret = if (filtersExpanded) "▾" else "▸"
+        return "Filters$countStr  $caret"
+    }
+
+    /** Called by badge click handlers so the header count stays in sync. */
+    fun onFilterBadgeChanged() {
+        filterToggleLabel.text = filterHeaderText()
+    }
+
     private fun filterSection(label: String, badges: List<JLabel>): JPanel {
         val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
         p.add(JBLabel(label).apply {
             font = font.deriveFont(font.size - 2f)
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
         }, BorderLayout.NORTH)
-        val flow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply { isOpaque = false }
-        badges.forEach { flow.add(it) }
-        p.add(flow, BorderLayout.CENTER)
+        val wrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+        badges.forEach { wrap.add(it) }
+        p.add(wrap, BorderLayout.CENTER)
         return p
     }
 
@@ -198,7 +283,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
     fun refresh() {
         val filters = buildFilters()
 
-        // Guard: nothing to query if neither parent keys nor fix version are provided
         if (filters.parentKeys.isEmpty() && filters.fixVersion.isBlank()) {
             SwingUtilities.invokeLater {
                 cardsPanel.removeAll()
@@ -257,7 +341,12 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
     private fun buildFilters(): TicketFilters {
         val parentKeys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+
         val activeTypes = typeBadges.zip(typeNames)
+            .filter { (badge, _) -> badge.getClientProperty("active") == true }
+            .map { (_, name) -> name }.toSet()
+
+        val activeNotTypes = notTypeBadges.zip(typeNames)
             .filter { (badge, _) -> badge.getClientProperty("active") == true }
             .map { (_, name) -> name }.toSet()
 
@@ -268,14 +357,17 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             myTasks = active(badgeMyTasks),
             unassigned = active(badgeUnassigned),
             filterToDo = active(badgeToDo),
+            filterReadyForDev = active(badgeReadyForDev),
             filterInProgress = active(badgeInProgress),
             filterPrOpen = active(badgePrOpen),
             filterMerged = active(badgeMerged),
             filterDeployedUat = active(badgeDeployedUat),
             filterPendingQa = active(badgePendingQa),
+            filterFailedQa = active(badgeFailedQa),
             filterDone = active(badgeDone),
             hideDone = active(badgeHideDone),
-            typeFilter = activeTypes
+            typeFilter = activeTypes,
+            notTypeFilter = activeNotTypes
         )
     }
 
@@ -289,16 +381,17 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         val titlePanel = JPanel(GridBagLayout()).apply {
             isOpaque = false
             val g = GridBagConstraints()
-            g.gridx = 0; g.gridy = 0; g.weightx = 0.0; g.fill = GridBagConstraints.NONE; g.insets =
-            Insets(0, 0, 0, 4)
+            g.gridx = 0; g.gridy = 0; g.weightx = 0.0; g.fill = GridBagConstraints.NONE
+            g.insets = Insets(0, 0, 0, 4)
             add(JBLabel(ticket.key).apply {
-                font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1); foreground =
-                Color(24, 95, 165)
+                font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1)
+                foreground = Color(24, 95, 165)
             }, g)
-            g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL; g.insets =
-            Insets(0, 0, 0, 0)
+            g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL
+            g.insets = Insets(0, 0, 0, 0)
             add(JBLabel(ticket.summary).apply {
-                font = font.deriveFont(Font.BOLD); minimumSize = Dimension(0, preferredSize.height)
+                font = font.deriveFont(Font.BOLD)
+                minimumSize = Dimension(0, preferredSize.height)
             }, g)
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
@@ -309,7 +402,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
 
-        // Status badge — now on this row instead of its own row
         metaPanel.add(makeStatusBadge(ticket.status))
         metaPanel.add(Box.createHorizontalStrut(6))
 
@@ -320,8 +412,8 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(typeName).apply {
-                font = font.deriveFont(font.size - 2f); foreground =
-                JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 2f)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
             })
             metaPanel.add(sepLabel())
         }
@@ -333,8 +425,8 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(priorityName).apply {
-                font = font.deriveFont(font.size - 2f); foreground =
-                JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 2f)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
             })
             metaPanel.add(sepLabel())
         }
@@ -365,18 +457,16 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
     }
 
     private fun sepLabel() = JBLabel("  ·  ").apply {
-        font = font.deriveFont(font.size - 2f); foreground =
-        JBUI.CurrentTheme.Label.disabledForeground()
+        font = font.deriveFont(font.size - 2f)
+        foreground = JBUI.CurrentTheme.Label.disabledForeground()
     }
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
         val status = ticket.status
         val isUnassigned = ticket.assigneeName == null
-        // pick-ticket: git checkout + assign + transition — must run in terminal
         if (isUnassigned || status == "Failed QA")
             panel.add(CardUtils.makeActionButton("pick") { runInTerminal("pick-ticket ${ticket.key}") })
-        // All remaining buttons are pure Jira status transitions — direct API calls
-        if (isMe && status in listOf("Deployed to UAT", "Pending QA", "Merged"))
+        if (isMe && status in listOf("Deployed to UAT", "Pending QA", "Failed QA", "Merged"))
             panel.add(CardUtils.makeTransitionButton("in progress") { doTransitionInProgress(ticket.key) })
         if (isMe && status == "In Progress")
             panel.add(CardUtils.makeTransitionButton("PR Open") {
@@ -409,10 +499,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         panel.add(CardUtils.makeActionButton("view") { JiraService.openTicketInBrowser(ticket.key) })
     }
 
-    /**
-     * Sends [command] to the active terminal tab — used only for pick-ticket
-     * which does git checkout + assign in addition to the Jira transition.
-     */
     private fun runInTerminal(command: String) {
         val proj = project ?: return
         ApplicationManager.getApplication().invokeLater {
@@ -430,7 +516,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
 
     // ── Transition helpers ────────────────────────────────────────────────────
 
-    /** Generic single-step Jira transition; refreshes the card list on success. */
     private fun doTransition(key: String, targetStatus: String) {
         setStatus("$key → $targetStatus…")
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -443,10 +528,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         }
     }
 
-    /**
-     * Smart in-progress transition: mirrors in-progress.sh logic.
-     * To Do → Ready → In Progress; any other status → In Progress directly.
-     */
     private fun doTransitionInProgress(key: String) {
         setStatus("$key → In Progress…")
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -458,7 +539,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             }
         }
     }
-
 
     private fun setStatus(text: String) {
         statusLabel.text = text
@@ -481,7 +561,6 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         }
     }
 
-    /** Deactivates all badges in [group] except [except]. Called when a grouped badge is activated. */
     fun deactivateGroupExcept(group: String, except: JLabel) {
         listOf(badgeMyTasks, badgeUnassigned)
             .filter { it != except && it.getClientProperty("group") == group }
@@ -507,23 +586,25 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
                     val nowActive = label.getClientProperty("active") != true
                     label.putClientProperty("active", nowActive)
                     applyBadgeStyle(label); label.repaint()
-                    // Mutual exclusion: deactivate sibling badges in the same group
                     val group = label.getClientProperty("group") as? String
                     if (nowActive && group != null) {
                         var p = label.parent
                         while (p != null) {
                             if (p is TicketsPanel) {
-                                p.deactivateGroupExcept(group, label)
-                                break
+                                p.deactivateGroupExcept(group, label); break
                             }
                             p = p.parent
                         }
                     }
+                    // Update header count, then refresh
                     var p = label.parent
                     while (p != null) {
                         if (p is TicketsPanel) {
-                            p.refresh(); break
-                        }; p = p.parent
+                            p.onFilterBadgeChanged()
+                            p.refresh()
+                            break
+                        }
+                        p = p.parent
                     }
                 }
 
@@ -543,18 +624,21 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
             val hovered = label.getClientProperty("hovered") == true
             when {
                 active -> {
-                    label.background = Color(24, 95, 165); label.foreground =
-                        Color.WHITE; label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(24, 95, 165)
+                    label.foreground = Color.WHITE
+                    label.border = JBUI.Borders.empty(3, 8)
                 }
 
                 hovered -> {
-                    label.background = Color(210, 228, 248); label.foreground =
-                        Color(24, 95, 165); label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(210, 228, 248)
+                    label.foreground = Color(24, 95, 165)
+                    label.border = JBUI.Borders.empty(3, 8)
                 }
 
                 else -> {
-                    label.background = Color(225, 223, 218); label.foreground =
-                        Color(110, 108, 103); label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(225, 223, 218)
+                    label.foreground = Color(110, 108, 103)
+                    label.border = JBUI.Borders.empty(3, 8)
                 }
             }
         }
@@ -562,26 +646,20 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
 
     private fun makeStatusBadge(status: String): JLabel {
         val (bg, fg) = when (status) {
-            "In Progress", "Defining AC", "PR Open" -> Pair(
-                Color(230, 241, 251),
-                Color(24, 95, 165)
-            )
+            "In Progress", "Defining AC", "PR Open" ->
+                Pair(Color(230, 241, 251), Color(24, 95, 165))
 
-            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" -> Pair(
-                Color(
-                    234,
-                    243,
-                    222
-                ), Color(59, 109, 17)
-            )
+            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" ->
+                Pair(Color(234, 243, 222), Color(59, 109, 17))
 
-            "Blocked", "Failed QA" -> Pair(Color(252, 235, 235), Color(163, 45, 45))
-            "Submitted for Review", "Pending AC Review" -> Pair(
-                Color(250, 238, 218),
-                Color(133, 79, 11)
-            )
+            "Blocked", "Failed QA" ->
+                Pair(Color(252, 235, 235), Color(163, 45, 45))
 
-            else -> Pair(Color(241, 239, 232), Color(95, 94, 90))
+            "Submitted for Review", "Pending AC Review" ->
+                Pair(Color(250, 238, 218), Color(133, 79, 11))
+
+            else ->
+                Pair(Color(241, 239, 232), Color(95, 94, 90))
         }
         return JLabel(status).apply {
             isOpaque = true; background = bg; foreground = fg
