@@ -71,7 +71,23 @@ object CardUtils {
             try {
                 val raw = ImageIO.read(cacheFile)
                 if (raw != null) {
-                    return ImageIcon(raw)
+                    val img = java.awt.image.BufferedImage(
+                        size,
+                        size,
+                        java.awt.image.BufferedImage.TYPE_INT_ARGB
+                    )
+                    val g = img.createGraphics()
+                    g.setRenderingHint(
+                        RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON
+                    )
+                    g.setRenderingHint(
+                        RenderingHints.KEY_INTERPOLATION,
+                        RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                    )
+                    g.drawImage(raw.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
+                    g.dispose()
+                    return ImageIcon(img)
                 }
                 cacheFile.delete()
             } catch (_: Exception) {
