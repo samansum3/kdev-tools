@@ -1,11 +1,15 @@
 package com.khalibre.link2command.devpanel.common
 
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.pr.PrService
 import com.khalibre.link2command.devpanel.tickets.JiraAuth
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.io.File
 import java.net.HttpURLConnection
+import javax.imageio.ImageIO
+import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.border.CompoundBorder
@@ -55,12 +59,38 @@ object CardUtils {
 
     fun escHtml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    fun fetchRemoteIcon(url: String, size: Int): javax.swing.ImageIcon? {
+    fun fetchRemoteIcon(
+        url: String,
+        size: Int,
+        workDir: File? = null,
+        useCache: Boolean = false
+    ): javax.swing.ImageIcon? {
+        val cacheFile = if (useCache) iconCacheFile(url, workDir) else null
+
+        if (cacheFile?.exists() == true) {
+            try {
+                val raw = ImageIO.read(cacheFile)
+                if (raw != null) {
+                    return ImageIcon(raw)
+                }
+                cacheFile.delete()
+            } catch (_: Exception) {
+                cacheFile.delete()
+            }
+        }
+
         return try {
             val conn = java.net.URL(url).openConnection() as HttpURLConnection
             JiraAuth.apply(conn)
 
             val raw = javax.imageio.ImageIO.read(conn.inputStream) ?: return null
+
+            if (cacheFile != null) {
+                try {
+                    ImageIO.write(raw, "png", cacheFile)
+                } catch (_: Exception) {
+                }
+            }
 
             val img = java.awt.image.BufferedImage(
                 size,
@@ -80,6 +110,47 @@ object CardUtils {
             javax.swing.ImageIcon(img)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    private fun iconCacheFile(url: String, workDir: File? = null): File? {
+        val gitDir = findGitDir(workDir) ?: return null
+
+        val hash = java.security.MessageDigest
+            .getInstance("SHA-1")
+            .digest(url.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+
+        val dir = File(gitDir, "cw/icons")
+        dir.mkdirs()
+
+        return File(dir, "$hash.png")
+    }
+
+    private fun findGitDir(workDir: File? = null): File? {
+        val result = PrService.runCmd(
+            listOf("git", "rev-parse", "--show-toplevel"),
+            workDir
+        )
+
+        if (result.exitCode != 0) return null
+
+        val root = File(result.stdout.trim())
+
+        val git = File(root, ".git")
+
+        return when {
+            git.isDirectory -> git.canonicalFile
+
+            git.isFile -> {
+                // worktree / submodule case
+                val content = git.readText().trim()
+                if (content.startsWith("gitdir:")) {
+                    File(content.removePrefix("gitdir:").trim()).canonicalFile
+                } else null
+            }
+
+            else -> null
         }
     }
 }

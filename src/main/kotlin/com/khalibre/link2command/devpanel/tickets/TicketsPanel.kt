@@ -16,7 +16,7 @@ import java.awt.event.MouseEvent
 import java.io.File
 import javax.swing.*
 
-class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()) {
+class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
@@ -553,7 +553,8 @@ class TicketsPanel(private val project: Project? = null) : JPanel(BorderLayout()
         if (iconCache.containsKey(url)) return
         iconCache[url] = null
         ApplicationManager.getApplication().executeOnPooledThread {
-            val img = CardUtils.fetchRemoteIcon(url, size)
+            val workDir = project.basePath?.let { java.io.File(it) }
+            val img = CardUtils.fetchRemoteIcon(url, size, workDir, true)
             if (img != null) {
                 iconCache[url] = img
                 SwingUtilities.invokeLater { onLoaded(img) }
