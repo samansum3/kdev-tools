@@ -120,27 +120,33 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         if (filtersFile.exists()) {
             try {
                 @Suppress("UNCHECKED_CAST")
-                val map = Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
+                val map =
+                    Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
+
                 fun restore(badge: JLabel, key: String) {
                     val active = map[key] ?: false
                     badge.putClientProperty("active", active)
                     applyBadgeStyle(badge)
                 }
-                restore(badgeMyTasks,     "myTasks")
-                restore(badgeUnassigned,  "unassigned")
-                restore(badgeToDo,        "toDo")
+                restore(badgeMyTasks, "myTasks")
+                restore(badgeUnassigned, "unassigned")
+                restore(badgeToDo, "toDo")
                 restore(badgeReadyForDev, "readyForDev")
-                restore(badgeInProgress,  "inProgress")
-                restore(badgePrOpen,      "prOpen")
-                restore(badgeMerged,      "merged")
+                restore(badgeInProgress, "inProgress")
+                restore(badgePrOpen, "prOpen")
+                restore(badgeMerged, "merged")
                 restore(badgeDeployedUat, "deployedUat")
-                restore(badgePendingQa,   "pendingQa")
-                restore(badgeFailedQa,    "failedQa")
-                restore(badgeDone,        "done")
-                restore(badgeHideDone,    "hideDone")
-                typeBadges.zip(typeNames).forEach    { (b, n) -> restore(b, "type_$n") }
+                restore(badgePendingQa, "pendingQa")
+                restore(badgeFailedQa, "failedQa")
+                restore(badgeDone, "done")
+                restore(badgeHideDone, "hideDone")
+                typeBadges.zip(typeNames).forEach { (b, n) -> restore(b, "type_$n") }
                 notTypeBadges.zip(typeNames).forEach { (b, n) -> restore(b, "notType_$n") }
-            } catch (_: Exception) { /* ignore corrupt file */ }
+                // Restore collapsed state (default true if not saved)
+                filtersExpanded = map["filtersExpanded"] ?: true
+                filtersBody.isVisible = filtersExpanded
+            } catch (_: Exception) { /* ignore corrupt file */
+            }
         }
     }
 
@@ -163,22 +169,26 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         // Persist filter badge state
         fun active(b: JLabel) = b.getClientProperty("active") == true
         val map = mutableMapOf(
-            "myTasks"     to active(badgeMyTasks),
-            "unassigned"  to active(badgeUnassigned),
-            "toDo"        to active(badgeToDo),
+            "myTasks" to active(badgeMyTasks),
+            "unassigned" to active(badgeUnassigned),
+            "toDo" to active(badgeToDo),
             "readyForDev" to active(badgeReadyForDev),
-            "inProgress"  to active(badgeInProgress),
-            "prOpen"      to active(badgePrOpen),
-            "merged"      to active(badgeMerged),
+            "inProgress" to active(badgeInProgress),
+            "prOpen" to active(badgePrOpen),
+            "merged" to active(badgeMerged),
             "deployedUat" to active(badgeDeployedUat),
-            "pendingQa"   to active(badgePendingQa),
-            "failedQa"    to active(badgeFailedQa),
-            "done"        to active(badgeDone),
-            "hideDone"    to active(badgeHideDone)
+            "pendingQa" to active(badgePendingQa),
+            "failedQa" to active(badgeFailedQa),
+            "done" to active(badgeDone),
+            "hideDone" to active(badgeHideDone)
         )
-        typeBadges.zip(typeNames).forEach    { (b, n) -> map["type_$n"]    = active(b) }
+        typeBadges.zip(typeNames).forEach { (b, n) -> map["type_$n"] = active(b) }
         notTypeBadges.zip(typeNames).forEach { (b, n) -> map["notType_$n"] = active(b) }
-        try { File(cw, "filters.json").writeText(Gson().toJson(map)) } catch (_: Exception) {}
+        map["filtersExpanded"] = filtersExpanded
+        try {
+            File(cw, "filters.json").writeText(Gson().toJson(map))
+        } catch (_: Exception) {
+        }
     }
 
     // ── UI construction ───────────────────────────────────────────────────────
@@ -305,7 +315,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         filtersExpanded = !filtersExpanded
         filtersBody.isVisible = filtersExpanded
         filterToggleLabel.text = filterHeaderText()
-        // Force the top panel to recompute its preferred size
+        saveToGitCw()
         filtersBody.revalidate()
         parent?.revalidate()
         parent?.repaint()
