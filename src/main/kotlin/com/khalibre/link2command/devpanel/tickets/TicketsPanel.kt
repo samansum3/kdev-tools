@@ -56,6 +56,19 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             badgeDeployedUat, badgePendingQa, badgeFailedQa, badgeDone, badgeHideDone
         ) + typeBadges + notTypeBadges
 
+    // Search
+    private val searchField = JBTextField().apply {
+        toolTipText = "Search by summary or key..."
+        emptyText.text = "Search by summary or key..."
+    }
+    private val searchInfoLabel = JBLabel("").apply {
+        font = font.deriveFont(font.size - 1f)
+        foreground = JBUI.CurrentTheme.Label.disabledForeground()
+    }
+
+    // Full ticket list from last fetch — search filters this in-memory
+    private var allLoadedTickets: List<JiraTicket> = emptyList()
+
     // Collapse state
     private var filtersExpanded = true
     private lateinit var filterToggleLabel: JLabel
@@ -222,6 +235,15 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
 
+        // ── Search row ───────────────────────────────────────────────────────
+        val searchRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
+            isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 28)
+        }
+        searchRow.add(searchField, BorderLayout.CENTER)
+        searchRow.add(searchInfoLabel, BorderLayout.EAST)
+        topPanel.add(searchRow)
+        topPanel.add(Box.createVerticalStrut(6))
+
         // ── Collapsible filter block ─────────────────────────────────────────
         topPanel.add(buildCollapsibleFilters())
         topPanel.add(Box.createVerticalStrut(4))
@@ -244,6 +266,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         parentKeysField.addActionListener { refresh() }
         fixVersionField.addActionListener { refresh() }
+        searchField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+        })
     }
 
     /**
@@ -388,24 +415,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 val tickets = JiraService.searchTickets(jql)
                 SwingUtilities.invokeLater {
                     if (requestGeneration.get() != myGeneration) return@invokeLater
-                    cardsPanel.removeAll()
-                    if (tickets.isEmpty()) {
-                        cardsPanel.add(JBLabel("No tickets found").apply {
-                            border = JBUI.Borders.empty(16, 4)
-                            foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                        })
-                    } else {
-                        cardsPanel.add(JBLabel("${tickets.size} ticket(s)").apply {
-                            border = JBUI.Borders.emptyBottom(6)
-                            font = font.deriveFont(font.size - 1f)
-                            foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                        })
-                        tickets.forEach { ticket ->
-                            cardsPanel.add(buildTicketCard(ticket))
-                            cardsPanel.add(Box.createVerticalStrut(6))
-                        }
-                    }
-                    cardsPanel.revalidate(); cardsPanel.repaint(); setStatus("")
+                    allLoadedTickets = tickets
+                    applySearch()
+                    setStatus("")
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
@@ -420,6 +432,47 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
             }
         }
+    }
+
+    /**
+     * Filters [allLoadedTickets] by the current search text and renders the result.
+     * Called both after a fresh fetch and on every search keystroke — no network call.
+     */
+    private fun applySearch() {
+        val query = searchField.text.trim().lowercase()
+        val filtered = if (query.isBlank()) allLoadedTickets
+        else allLoadedTickets.filter {
+            it.summary.lowercase().contains(query) || it.key.lowercase().contains(query)
+        }
+
+        val total = allLoadedTickets.size
+        val matched = filtered.size
+
+        searchInfoLabel.text = when {
+            query.isBlank() && total == 0 -> ""
+            query.isBlank() -> "$total ticket${if (total == 1) "" else "s"}"
+            matched == 0 -> "no match in $total"
+            matched == total -> "$total ticket${if (total == 1) "" else "s"}"
+            else -> "$matched of $total"
+        }
+
+        cardsPanel.removeAll()
+        if (filtered.isEmpty()) {
+            cardsPanel.add(
+                JBLabel(
+                    if (query.isBlank()) "No tickets found" else "No tickets match $query"
+                ).apply {
+                    border = JBUI.Borders.empty(16, 4)
+                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                })
+        } else {
+            filtered.forEach { ticket ->
+                cardsPanel.add(buildTicketCard(ticket))
+                cardsPanel.add(Box.createVerticalStrut(6))
+            }
+        }
+        cardsPanel.revalidate()
+        cardsPanel.repaint()
     }
 
     private fun buildFilters(): TicketFilters {
