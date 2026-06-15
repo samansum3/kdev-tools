@@ -170,14 +170,14 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val keys = parentKeysField.text.split(",")
             .map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-        if (keys.isNotEmpty()) {
-            File(cw, "parent-tickets").writeText(keys.joinToString("\n"))
-        }
+        val parentFile = File(cw, "parent-tickets")
+        if (keys.isNotEmpty()) parentFile.writeText(keys.joinToString("\n"))
+        else parentFile.delete()
 
         val ver = fixVersionField.text.trim()
-        if (ver.isNotBlank()) {
-            File(cw, "fix-version").writeText(ver)
-        }
+        val versionFile = File(cw, "fix-version")
+        if (ver.isNotBlank()) versionFile.writeText(ver)
+        else versionFile.delete()
 
         // Persist filter badge state
         fun active(b: JLabel) = b.getClientProperty("active") == true
@@ -237,7 +237,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         // ── Search row ───────────────────────────────────────────────────────
         val searchRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
-            isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 28)
+            isOpaque = false
+            maximumSize = Dimension(Int.MAX_VALUE, 28)
         }
         searchRow.add(searchField, BorderLayout.CENTER)
         searchRow.add(searchInfoLabel, BorderLayout.EAST)
