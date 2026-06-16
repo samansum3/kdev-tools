@@ -15,7 +15,9 @@ data class JiraTicket(
     val issueType: String?,
     val issueTypeIconUrl: String?,
     val priority: String?,
-    val priorityIconUrl: String?
+    val priorityIconUrl: String?,
+    // Loaded lazily after search — null means not yet fetched
+    val availableTransitions: List<String>? = null
 )
 
 data class TicketFilters(
@@ -120,6 +122,35 @@ object JiraService {
             )
         File("/tmp/result.json").writeText(result.stdout) // Debug output
         return parseAcliResponse(result.stdout)
+    }
+
+    /**
+     * Returns list of (targetStatus, transitionName) pairs.
+     * targetStatus = transitions[].to.name  — the status it moves to
+     * transitionName = transitions[].name   — the human label e.g. "Begin test in local"
+     */
+    fun fetchAvailableTransitions(ticketKey: String): List<Pair<String, String>> {
+        return try {
+            val cfg = com.khalibre.link2command.devpanel.config.DevConfig.load()
+            val baseUrl = cfg.jira.base_url.trimEnd('/')
+            val auth = java.util.Base64.getEncoder()
+                .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
+            val conn = java.net.URL("$baseUrl/rest/api/3/issue/$ticketKey/transitions")
+                .openConnection() as java.net.HttpURLConnection
+            conn.setRequestProperty("Authorization", "Basic $auth")
+            conn.setRequestProperty("Accept", "application/json")
+            conn.connectTimeout = 8_000; conn.readTimeout = 10_000
+            if (conn.responseCode != 200) return emptyList()
+            val root = JsonParser.parseString(conn.inputStream.bufferedReader().readText())
+            root.asJsonObject.getAsJsonArray("transitions")
+                ?.mapNotNull {
+                    val obj = it.asJsonObject
+                    val targetStatus   = obj.getAsJsonObject("to")?.get("name")?.asString ?: return@mapNotNull null
+                    val transitionName = obj.get("name")?.asString ?: targetStatus
+                    Pair(targetStatus, transitionName)
+                }
+                ?: emptyList()
+        } catch (_: Exception) { emptyList() }
     }
 
     fun assignToMe(ticketKey: String): Result<String> {
