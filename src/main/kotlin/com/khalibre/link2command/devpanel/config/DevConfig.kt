@@ -18,9 +18,23 @@ data class JiraConfig(
     val api_token: String = ""
 )
 
+/**
+ * Per-project ticket behaviour config.
+ * [doneStatusesByType]  — map of issueType name → list of statuses considered "done" for that type.
+ *                         Used by the "Hide Done" JQL clause.
+ * [excludedStatuses]    — statuses hidden from the Tickets > Status filter badges.
+ * [excludedTypes]       — issue types hidden from Tickets > type / not-type filter badges.
+ */
+data class TicketConfig(
+    val doneStatusesByType: Map<String, List<String>> = emptyMap(),
+    val excludedStatuses: List<String> = emptyList(),
+    val excludedTypes: List<String> = emptyList()
+)
+
 data class DevConfig(
     val git: GitConfig = GitConfig(),
-    val jira: JiraConfig = JiraConfig()
+    val jira: JiraConfig = JiraConfig(),
+    val ticket: TicketConfig = TicketConfig()
 ) {
     companion object {
         private val CONFIG_FILE =

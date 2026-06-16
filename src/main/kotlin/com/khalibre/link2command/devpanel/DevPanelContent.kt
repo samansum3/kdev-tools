@@ -13,7 +13,7 @@ class DevPanelContent(project: Project) : JPanel(BorderLayout()) {
 
     private val prPanel = PrPanel(project)
     private val ticketsPanel = TicketsPanel(project)
-    private val configPanel = ConfigPanel(project)
+    private val configPanel = ConfigPanel(project).also { it.setTicketsPanel(ticketsPanel) }
 
     private val tabs = JBTabbedPane().apply {
         addTab("PR Tools", prPanel)
@@ -24,8 +24,6 @@ class DevPanelContent(project: Project) : JPanel(BorderLayout()) {
     init {
         add(tabs, BorderLayout.CENTER)
         tabs.addChangeListener { refreshCurrentTab() }
-
-        // load selected tab data on startup
         SwingUtilities.invokeLater { refreshCurrentTab() }
     }
 

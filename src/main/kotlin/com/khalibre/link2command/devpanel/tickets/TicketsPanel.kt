@@ -3,19 +3,17 @@ package com.khalibre.link2command.devpanel.tickets
 import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.CardUtils
-import org.jetbrains.plugins.terminal.TerminalToolWindowFactory
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+import javax.imageio.ImageIO
 import javax.swing.*
 
 class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
@@ -23,57 +21,38 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
-    // owner (mutually exclusive — toggling one deactivates the other)
+    // owner (mutually exclusive)
     private val badgeMyTasks =
         makeBadge("My Tasks", false).also { it.putClientProperty("group", "owner") }
     private val badgeUnassigned =
         makeBadge("Unassigned", false).also { it.putClientProperty("group", "owner") }
-
-    // status badges
-    private val badgeToDo = makeBadge("To Do", false)
-    private val badgeReadyForDev = makeBadge("Ready for Dev", false)
-    private val badgeInProgress = makeBadge("In Progress", false)
-    private val badgePrOpen = makeBadge("PR Open", false)
-    private val badgeMerged = makeBadge("Merged", false)
-    private val badgeDeployedUat = makeBadge("Deployed to UAT", false)
-    private val badgePendingQa = makeBadge("Pending QA", false)
-    private val badgeFailedQa = makeBadge("Failed QA", false)
-    private val badgeDone = makeBadge("Done", false)
     private val badgeHideDone = makeBadge("Hide Done", false)
 
-    private val typeNames = listOf(
-        "Story", "Epic", "Improvement", "Task", "Sub-task",
-        "Bug", "Defect", "Operations", "Test Report", "Release Procedure", "Translation Update"
-    )
-    private val typeBadges = typeNames.map { makeBadge(it, false) }
-    private val notTypeBadges = typeNames.map { makeBadge(it, false) }
+    // Dynamic badges — rebuilt when meta is loaded
+    private var statusBadges: List<JLabel> = emptyList()   // one per visible Jira status
+    private var typeBadges: List<JLabel> = emptyList()
+    private var notTypeBadges: List<JLabel> = emptyList()
+    private var visibleStatuses: List<String> = emptyList()
+    private var visibleTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
 
-    // All filter badges in one flat list — used for active-count computation
-    private val allFilterBadges: List<JLabel>
-        get() = listOf(
-            badgeMyTasks, badgeUnassigned,
-            badgeToDo, badgeReadyForDev, badgeInProgress, badgePrOpen, badgeMerged,
-            badgeDeployedUat, badgePendingQa, badgeFailedQa, badgeDone, badgeHideDone
-        ) + typeBadges + notTypeBadges
+    // Wrap containers rebuilt on meta load
+    private lateinit var statusWrap: JPanel
+    private lateinit var typeWrap: JPanel
+    private lateinit var notTypeWrap: JPanel
+    private lateinit var filtersBody: JPanel
+    private lateinit var filterToggleLabel: JLabel
 
     // Search
     private val searchField = JBTextField().apply {
-        toolTipText = "Search by summary or key..."
-        emptyText.text = "Search by summary or key..."
+        toolTipText = "Search by summary or key..."; emptyText.text = "Search by summary or key..."
     }
     private val searchInfoLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
     }
 
-    // Full ticket list from last fetch — search filters this in-memory
     private var allLoadedTickets: List<JiraTicket> = emptyList()
-
-    // Collapse state
     private var filtersExpanded = true
-    private lateinit var filterToggleLabel: JLabel
-    private lateinit var filtersBody: JPanel
-
     private val cardsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
     private val statusLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
@@ -81,27 +60,30 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private var currentUserEmail: String? = null
-    private val iconCache = mutableMapOf<String, ImageIcon?>()
+
+    // icon caches
+    private val memIconCache =
+        mutableMapOf<String, ImageIcon?>()      // url  → icon (priority/generic)
+    private val typeIconMemCache = mutableMapOf<String, ImageIcon?>()  // typeName → icon
+
     private val transitionsCache = mutableMapOf<String, List<Pair<String, String>>>()
-
-    // Debounce: fires 300 ms after the last badge toggle
-    private var debounceTimer: javax.swing.Timer? = null
+    private var debounceTimer: Timer? = null
     private val DEBOUNCE_MS = 300
-
-    // Stale-request guard: only the response matching the latest generation is applied
     private val requestGeneration = AtomicLong(0)
+
+    // ── Saved badge state from filters.json, applied once badges are built ──
+    private var pendingFilterState: Map<String, Boolean> = emptyMap()
 
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
-        loadFromGitCw()
-        onFilterBadgeChanged() // sync header count after badge restore
+        loadMetaAndRestoreFilters()
     }
 
-    // ── .git/cw persistence ──────────────────────────────────────────────────
+    // ── git/cw helpers ───────────────────────────────────────────────────────
 
     private fun gitRoot(): File? {
-        val base = project?.basePath ?: return null
+        val base = project.basePath ?: return null
         var dir = File(base)
         while (dir.parentFile != null) {
             if (File(dir, ".git").isDirectory) return dir
@@ -110,94 +92,158 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         return null
     }
 
-    private fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
+    fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
 
-    private fun loadFromGitCw() {
-        val cw = cwDir() ?: return
-        val parentFile = File(cw, "parent-tickets")
-        val versionFile = File(cw, "fix-version")
+    // ── Meta loading ─────────────────────────────────────────────────────────
 
-        if (parentKeysField.text.isBlank() && parentFile.exists()) {
-            val keys = parentFile.readLines()
-                .map { it.trim() }
-                .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-            if (keys.isNotEmpty()) parentKeysField.text = keys.joinToString(", ")
-        }
+    /**
+     * Loads Jira statuses + types from cache (or Jira if cache absent),
+     * then rebuilds the badge rows and restores persisted filter state.
+     * Always runs on a pooled thread; UI updates on EDT.
+     */
+    fun loadMetaAndRestoreFilters() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val cw = cwDir()
+            val statuses = if (cw != null) JiraMetaService.loadStatuses(cw) else emptyList()
+            val types = if (cw != null) JiraMetaService.loadTypes(cw) else emptyList()
 
-        if (fixVersionField.text.isBlank() && versionFile.exists()) {
-            val v = versionFile.readText().trim()
-            if (v.isNotBlank()) fixVersionField.text = v
-        }
-
-        // Restore filter badge state
-        val filtersFile = File(cw, "filters.json")
-        if (filtersFile.exists()) {
-            try {
-                @Suppress("UNCHECKED_CAST")
-                val map =
-                    Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
-
-                fun restore(badge: JLabel, key: String) {
-                    val active = map[key] ?: false
-                    badge.putClientProperty("active", active)
-                    applyBadgeStyle(badge)
-                }
-                restore(badgeMyTasks, "myTasks")
-                restore(badgeUnassigned, "unassigned")
-                restore(badgeToDo, "toDo")
-                restore(badgeReadyForDev, "readyForDev")
-                restore(badgeInProgress, "inProgress")
-                restore(badgePrOpen, "prOpen")
-                restore(badgeMerged, "merged")
-                restore(badgeDeployedUat, "deployedUat")
-                restore(badgePendingQa, "pendingQa")
-                restore(badgeFailedQa, "failedQa")
-                restore(badgeDone, "done")
-                restore(badgeHideDone, "hideDone")
-                typeBadges.zip(typeNames).forEach { (b, n) -> restore(b, "type_$n") }
-                notTypeBadges.zip(typeNames).forEach { (b, n) -> restore(b, "notType_$n") }
-                // Restore collapsed state (default true if not saved)
-                filtersExpanded = map["filtersExpanded"] ?: true
-                filtersBody.isVisible = filtersExpanded
-            } catch (_: Exception) { /* ignore corrupt file */
+            SwingUtilities.invokeLater {
+                rebuildDynamicBadges(statuses, types)
+                // Restore persisted filter state (may have been loaded already from file)
+                applyPendingFilterState()
+                onFilterBadgeChanged()
             }
         }
+    }
+
+    /**
+     * Called externally by TicketConfigPanel after a forced reload of statuses or types,
+     * so the badge rows reflect the fresh data immediately.
+     */
+    fun reloadMetaBadges() = loadMetaAndRestoreFilters()
+
+    // ── Dynamic badge construction ────────────────────────────────────────────
+
+    private fun rebuildDynamicBadges(
+        allStatuses: List<String>,
+        allTypes: List<JiraMetaService.IssueTypeInfo>
+    ) {
+        val cfg = com.khalibre.link2command.devpanel.config.DevConfig.load().ticket
+        val excludedStatuses = cfg.excludedStatuses.toSet()
+        val excludedTypes = cfg.excludedTypes.toSet()
+
+        visibleStatuses = allStatuses.filter { it !in excludedStatuses }
+        visibleTypeInfos = allTypes.filter { it.name !in excludedTypes }
+
+        // Build status badges
+        statusBadges = visibleStatuses.map { name -> makeBadge(name, false) }
+
+        // Build type badges — with icon placeholder on the left
+        typeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
+        notTypeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
+
+        // Rebuild wrap panels
+        statusWrap.removeAll()
+        statusBadges.forEach { statusWrap.add(it) }
+        statusWrap.add(badgeHideDone)
+
+        typeWrap.removeAll()
+        typeBadges.forEach { typeWrap.add(it) }
+
+        notTypeWrap.removeAll()
+        notTypeBadges.forEach { notTypeWrap.add(it) }
+
+        statusWrap.revalidate(); statusWrap.repaint()
+        typeWrap.revalidate(); typeWrap.repaint()
+        notTypeWrap.revalidate(); notTypeWrap.repaint()
+        filtersBody.revalidate(); filtersBody.repaint()
+    }
+
+    /**
+     * Creates a badge JLabel that includes a small type icon on its left side.
+     * The icon is loaded asynchronously and cached by type name.
+     */
+    private fun makeTypeBadge(info: JiraMetaService.IssueTypeInfo): JLabel {
+        val badge = makeBadge(info.name, false)
+        // Load icon and prepend it
+        loadTicketTypeIconAsync(info.name, info.iconUrl, 12) { icon ->
+            badge.icon = icon
+            badge.iconTextGap = 3
+            badge.revalidate()
+            badge.repaint()
+        }
+        return badge
+    }
+
+    // ── Persistence ──────────────────────────────────────────────────────────
+
+    private fun loadFilterStateFromDisk() {
+        val cw = cwDir() ?: return
+        val filtersFile = File(cw, "filters.json")
+        if (!filtersFile.exists()) return
+        try {
+            @Suppress("UNCHECKED_CAST")
+            val map =
+                Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
+            pendingFilterState = map
+
+            val parentFile = File(cw, "parent-tickets")
+            val versionFile = File(cw, "fix-version")
+            if (parentKeysField.text.isBlank() && parentFile.exists()) {
+                val keys = parentFile.readLines().map { it.trim() }
+                    .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+                if (keys.isNotEmpty()) parentKeysField.text = keys.joinToString(", ")
+            }
+            if (fixVersionField.text.isBlank() && versionFile.exists()) {
+                val v = versionFile.readText().trim()
+                if (v.isNotBlank()) fixVersionField.text = v
+            }
+            filtersExpanded = map["filtersExpanded"] ?: true
+            filtersBody.isVisible = filtersExpanded
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun applyPendingFilterState() {
+        val map = pendingFilterState
+        if (map.isEmpty()) return
+
+        fun restore(badge: JLabel, key: String) {
+            badge.putClientProperty("active", map[key] ?: false)
+            applyBadgeStyle(badge)
+        }
+        restore(badgeMyTasks, "myTasks")
+        restore(badgeUnassigned, "unassigned")
+        restore(badgeHideDone, "hideDone")
+
+        statusBadges.zip(visibleStatuses).forEach { (b, n) -> restore(b, "status_$n") }
+        typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "type_${i.name}") }
+        notTypeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "notType_${i.name}") }
     }
 
     private fun saveToGitCw() {
         val cw = cwDir() ?: return
         cw.mkdirs()
 
-        val keys = parentKeysField.text.split(",")
-            .map { it.trim().uppercase() }
+        val keys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
         val parentFile = File(cw, "parent-tickets")
-        if (keys.isNotEmpty()) parentFile.writeText(keys.joinToString("\n"))
-        else parentFile.delete()
+        if (keys.isNotEmpty()) parentFile.writeText(keys.joinToString("\n")) else parentFile.delete()
 
         val ver = fixVersionField.text.trim()
         val versionFile = File(cw, "fix-version")
-        if (ver.isNotBlank()) versionFile.writeText(ver)
-        else versionFile.delete()
+        if (ver.isNotBlank()) versionFile.writeText(ver) else versionFile.delete()
 
-        // Persist filter badge state
         fun active(b: JLabel) = b.getClientProperty("active") == true
         val map = mutableMapOf(
             "myTasks" to active(badgeMyTasks),
             "unassigned" to active(badgeUnassigned),
-            "toDo" to active(badgeToDo),
-            "readyForDev" to active(badgeReadyForDev),
-            "inProgress" to active(badgeInProgress),
-            "prOpen" to active(badgePrOpen),
-            "merged" to active(badgeMerged),
-            "deployedUat" to active(badgeDeployedUat),
-            "pendingQa" to active(badgePendingQa),
-            "failedQa" to active(badgeFailedQa),
-            "done" to active(badgeDone),
             "hideDone" to active(badgeHideDone)
         )
-        typeBadges.zip(typeNames).forEach { (b, n) -> map["type_$n"] = active(b) }
-        notTypeBadges.zip(typeNames).forEach { (b, n) -> map["notType_$n"] = active(b) }
+        statusBadges.zip(visibleStatuses).forEach { (b, n) -> map["status_$n"] = active(b) }
+        typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> map["type_${i.name}"] = active(b) }
+        notTypeBadges.zip(visibleTypeInfos)
+            .forEach { (b, i) -> map["notType_${i.name}"] = active(b) }
         map["filtersExpanded"] = filtersExpanded
         try {
             File(cw, "filters.json").writeText(Gson().toJson(map))
@@ -211,13 +257,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val topPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
             addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) {
-                    requestFocusInWindow()
-                }
+                override fun mouseClicked(e: MouseEvent) = requestFocusInWindow().let {}
             })
         }
 
-        // ── Input row ────────────────────────────────────────────────────────
+        // Input row
         val inputRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 54)
         }
@@ -236,17 +280,20 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
 
-        // ── Search row ───────────────────────────────────────────────────────
+        // Search row
         val searchRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
-            isOpaque = false
-            maximumSize = Dimension(Int.MAX_VALUE, 28)
+            isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 28)
         }
-        searchRow.add(searchField, BorderLayout.CENTER)
-        searchRow.add(searchInfoLabel, BorderLayout.EAST)
+        searchRow.add(searchField)
+        searchRow.add(searchInfoLabel)
         topPanel.add(searchRow)
         topPanel.add(Box.createVerticalStrut(6))
 
-        // ── Collapsible filter block ─────────────────────────────────────────
+        // Build wrap panels (empty now, filled after meta load)
+        statusWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+        typeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+        notTypeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+
         topPanel.add(buildCollapsibleFilters())
         topPanel.add(Box.createVerticalStrut(4))
         topPanel.add(statusLabel)
@@ -258,11 +305,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             border = JBUI.Borders.empty()
             verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-            addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) {
-                    requestFocusInWindow()
-                }
-            })
         }
         add(scroll, BorderLayout.CENTER)
 
@@ -273,33 +315,26 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
         })
+
+        // Load persisted state (badges not built yet; will be applied in applyPendingFilterState)
+        loadFilterStateFromDisk()
     }
 
-    /**
-     * Builds the collapsible "Filters" section.
-     * Header row: "Filters (N)  ▾" — clicking anywhere on it toggles the body.
-     * Body: the four filter subsections (owner, status, type, not type).
-     */
     private fun buildCollapsibleFilters(): JPanel {
-        val container = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
-        }
+        val container =
+            JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
 
-        // ── Header ───────────────────────────────────────────────────────────
         filterToggleLabel = JLabel(filterHeaderText()).apply {
             font = font.deriveFont(Font.BOLD, font.size.toFloat())
             foreground = JBUI.CurrentTheme.Label.foreground()
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             border = JBUI.Borders.empty(2, 0)
         }
-
         val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false
             maximumSize = Dimension(Int.MAX_VALUE, filterToggleLabel.preferredSize.height + 6)
             add(filterToggleLabel)
         }
-
-        // Toggle on click anywhere in headerRow
         val toggleListener = object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) = toggleFilters()
             override fun mouseEntered(e: MouseEvent) {
@@ -312,32 +347,42 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         filterToggleLabel.addMouseListener(toggleListener)
         headerRow.addMouseListener(toggleListener)
-
         container.add(headerRow)
         container.add(Box.createVerticalStrut(4))
 
-        // ── Body (the four sections) ─────────────────────────────────────────
-        filtersBody = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false
-        }
-        filtersBody.add(filterSection("owner", listOf(badgeMyTasks, badgeUnassigned)))
-        filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody =
+            JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
+
         filtersBody.add(
             filterSection(
-                "status",
-                listOf(
-                    badgeToDo, badgeReadyForDev, badgeInProgress, badgePrOpen, badgeMerged,
-                    badgeDeployedUat, badgePendingQa, badgeFailedQa, badgeDone, badgeHideDone
-                )
+                "owner",
+                listOf(badgeMyTasks, badgeUnassigned),
+                prebuiltWrap = null
             )
         )
         filtersBody.add(Box.createVerticalStrut(4))
-        filtersBody.add(filterSection("type", typeBadges))
+        filtersBody.add(filterSection("status", emptyList(), prebuiltWrap = statusWrap))
         filtersBody.add(Box.createVerticalStrut(4))
-        filtersBody.add(filterSection("not type", notTypeBadges))
+        filtersBody.add(filterSection("type", emptyList(), prebuiltWrap = typeWrap))
+        filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody.add(filterSection("not type", emptyList(), prebuiltWrap = notTypeWrap))
 
         container.add(filtersBody)
         return container
+    }
+
+    private fun filterSection(label: String, badges: List<JLabel>, prebuiltWrap: JPanel?): JPanel {
+        val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
+        p.add(JBLabel(label).apply {
+            font = font.deriveFont(font.size - 2f)
+            foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        }, BorderLayout.NORTH)
+        val wrap = prebuiltWrap ?: JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
+            isOpaque = false
+            badges.forEach { add(it) }
+        }
+        p.add(wrap, BorderLayout.CENTER)
+        return p
     }
 
     private fun toggleFilters() {
@@ -345,54 +390,33 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         filtersBody.isVisible = filtersExpanded
         filterToggleLabel.text = filterHeaderText()
         saveToGitCw()
-        filtersBody.revalidate()
-        parent?.revalidate()
-        parent?.repaint()
+        filtersBody.revalidate(); parent?.revalidate(); parent?.repaint()
     }
 
-    /** "Filters (N)  ▾" or "Filters (N)  ▸" depending on expand state. */
     private fun filterHeaderText(): String {
-        val count = allFilterBadges.count { it.getClientProperty("active") == true }
+        val count = allFilterBadges().count { it.getClientProperty("active") == true }
         val countStr = if (count > 0) " ($count)" else ""
         val caret = if (filtersExpanded) "▾" else "▸"
         return "Filters$countStr  $caret"
     }
 
-    /** Called by badge click handlers so the header count stays in sync. */
+    private fun allFilterBadges(): List<JLabel> =
+        listOf(badgeMyTasks, badgeUnassigned, badgeHideDone) +
+                statusBadges + typeBadges + notTypeBadges
+
     fun onFilterBadgeChanged() {
         filterToggleLabel.text = filterHeaderText()
     }
 
-    private fun filterSection(label: String, badges: List<JLabel>): JPanel {
-        val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
-        p.add(JBLabel(label).apply {
-            font = font.deriveFont(font.size - 2f)
-            foreground = JBUI.CurrentTheme.Label.disabledForeground()
-        }, BorderLayout.NORTH)
-        val wrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
-        badges.forEach { wrap.add(it) }
-        p.add(wrap, BorderLayout.CENTER)
-        return p
-    }
-
     // ── Refresh / data loading ────────────────────────────────────────────────
 
-    /**
-     * Debounced refresh — waits DEBOUNCE_MS after the last call before firing.
-     * Called from badge click handlers and input fields.
-     */
     fun refresh() {
         debounceTimer?.stop()
-        debounceTimer = javax.swing.Timer(DEBOUNCE_MS) { doRefresh() }.apply {
-            isRepeats = false
-            start()
-        }
+        debounceTimer = Timer(DEBOUNCE_MS) { doRefresh() }.apply { isRepeats = false; start() }
     }
 
-    /** Actual fetch — generation-guarded so stale responses are discarded. */
     private fun doRefresh() {
         val filters = buildFilters()
-
         if (filters.parentKeys.isEmpty() && filters.fixVersion.isBlank()) {
             cardsPanel.removeAll()
             cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s) or a fix version to load tickets.</i></html>").apply {
@@ -400,14 +424,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
             })
             cardsPanel.revalidate(); cardsPanel.repaint()
-            setStatus("")
-            return
+            setStatus(""); return
         }
 
         saveToGitCw()
-        setStatus("Loading...")
-
-        // Each call gets a unique generation; stale responses are ignored
+        setStatus("Loading…")
         val myGeneration = requestGeneration.incrementAndGet()
 
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -418,8 +439,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 SwingUtilities.invokeLater {
                     if (requestGeneration.get() != myGeneration) return@invokeLater
                     allLoadedTickets = tickets
-                    applySearch()
-                    setStatus("")
+                    applySearch(); setStatus("")
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
@@ -436,10 +456,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    /**
-     * Filters [allLoadedTickets] by the current search text and renders the result.
-     * Called both after a fresh fetch and on every search keystroke — no network call.
-     */
     private fun applySearch() {
         val query = searchField.text.trim().lowercase()
         val filtered = if (query.isBlank()) allLoadedTickets
@@ -449,7 +465,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val total = allLoadedTickets.size
         val matched = filtered.size
-
         searchInfoLabel.text = when {
             query.isBlank() && total == 0 -> ""
             query.isBlank() -> "$total ticket${if (total == 1) "" else "s"}"
@@ -473,21 +488,24 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 cardsPanel.add(Box.createVerticalStrut(6))
             }
         }
-        cardsPanel.revalidate()
-        cardsPanel.repaint()
+        cardsPanel.revalidate(); cardsPanel.repaint()
     }
 
     private fun buildFilters(): TicketFilters {
         val parentKeys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
 
-        val activeTypes = typeBadges.zip(typeNames)
+        val activeStatuses = statusBadges.zip(visibleStatuses)
             .filter { (badge, _) -> badge.getClientProperty("active") == true }
             .map { (_, name) -> name }.toSet()
 
-        val activeNotTypes = notTypeBadges.zip(typeNames)
+        val activeTypes = typeBadges.zip(visibleTypeInfos)
             .filter { (badge, _) -> badge.getClientProperty("active") == true }
-            .map { (_, name) -> name }.toSet()
+            .map { (_, info) -> info.name }.toSet()
+
+        val activeNotTypes = notTypeBadges.zip(visibleTypeInfos)
+            .filter { (badge, _) -> badge.getClientProperty("active") == true }
+            .map { (_, info) -> info.name }.toSet()
 
         fun active(b: JLabel) = b.getClientProperty("active") == true
         return TicketFilters(
@@ -495,28 +513,20 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             fixVersion = fixVersionField.text.trim(),
             myTasks = active(badgeMyTasks),
             unassigned = active(badgeUnassigned),
-            filterToDo = active(badgeToDo),
-            filterReadyForDev = active(badgeReadyForDev),
-            filterInProgress = active(badgeInProgress),
-            filterPrOpen = active(badgePrOpen),
-            filterMerged = active(badgeMerged),
-            filterDeployedUat = active(badgeDeployedUat),
-            filterPendingQa = active(badgePendingQa),
-            filterFailedQa = active(badgeFailedQa),
-            filterDone = active(badgeDone),
+            activeStatuses = activeStatuses,
             hideDone = active(badgeHideDone),
             typeFilter = activeTypes,
             notTypeFilter = activeNotTypes
         )
     }
 
-    // ── Card builder ─────────────────────────────────────────────────────────
+    // ── Card builder ──────────────────────────────────────────────────────────
 
     private fun buildTicketCard(ticket: JiraTicket): JPanel {
         val card = CardUtils.makeCard(ticket.key, "tickets")
         val gbc = CardUtils.cardGbc()
 
-        // ── Row 0: key + truncating summary ──────────────────────────────────
+        // Row 0: key + summary
         val titlePanel = JPanel(GridBagLayout()).apply {
             isOpaque = false
             val g = GridBagConstraints()
@@ -535,19 +545,21 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
 
-        // ── Row 1: status badge · type · priority · assignee ─────────────────
+        // Row 1: status · type · priority · assignee
         val isMe = ticket.assigneeEmail != null && ticket.assigneeEmail == currentUserEmail
         val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
-
         metaPanel.add(makeStatusBadge(ticket.status))
         metaPanel.add(Box.createHorizontalStrut(6))
 
         ticket.issueType?.let { typeName ->
             val iconLabel =
                 JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = typeName }
-            loadIconAsync(ticket.issueTypeIconUrl, 14) { iconLabel.icon = it; metaPanel.repaint() }
+            // Use type-name cache first, fall back to URL-based cache
+            loadTicketTypeIconAsync(typeName, ticket.issueTypeIconUrl, 14) {
+                iconLabel.icon = it; metaPanel.repaint()
+            }
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(typeName).apply {
@@ -582,8 +594,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         })
         gbc.gridy = 1; card.add(metaPanel, gbc)
 
-        // ── Row 2: action buttons ─────────────────────────────────────────────
-        val actionPanel = JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
+        // Row 2: action buttons — WrapLayout so they wrap when panel is narrow
+        val actionPanel = JPanel(WrapLayout(FlowLayout.LEFT, 2, 2)).apply {
             isOpaque = false; border = JBUI.Borders.emptyLeft(-5)
         }
         addTicketActions(actionPanel, ticket, isMe)
@@ -602,13 +614,10 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
         val isUnassigned = ticket.assigneeName == null
-
-        // Always-visible: Pick (if applicable) and View
         if (isUnassigned || ticket.status == "Failed QA")
             panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
         panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
 
-        // Transition buttons — loaded from Jira dynamically, cached after first fetch
         val cacheKey = "${ticket.key}-${ticket.status}-${ticket.assigneeName}"
         val cached = transitionsCache[cacheKey]
         if (cached != null) {
@@ -627,10 +636,12 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                     panel.remove(loadingLabel)
                     renderTransitionButtons(panel, ticket, isMe, transitions)
                     panel.revalidate(); panel.repaint()
-                    var p: java.awt.Container? = panel.parent
+                    // Propagate size change up the card
+                    var p: Container? = panel.parent
                     while (p != null) {
-                        p.revalidate(); if (p is JPanel && p.layout is GridBagLayout) break; p =
-                            p.parent
+                        p.revalidate()
+                        if (p is JPanel && p.layout is GridBagLayout) break
+                        p = p.parent
                     }
                 }
             }
@@ -641,33 +652,104 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         panel: JPanel, ticket: JiraTicket, isMe: Boolean, transitions: List<Pair<String, String>>
     ) {
         transitions.forEach { (targetStatus, transitionName) ->
-            val btn = if (targetStatus == "In Progress") {
+            val btn = if (targetStatus == "In Progress")
                 CardUtils.makeTransitionButton(
                     targetStatus,
                     transitionName
                 ) { doTransitionInProgress(ticket.key) }
-            } else {
+            else
                 CardUtils.makeTransitionButton(
                     targetStatus,
                     transitionName
                 ) { doTransition(ticket.key, targetStatus) }
-            }
             panel.add(btn)
         }
     }
 
-    private fun runInTerminal(command: String) {
-        val proj = project ?: return
-        ApplicationManager.getApplication().invokeLater {
-            val toolWindow = ToolWindowManager.getInstance(proj)
-                .getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID) ?: return@invokeLater
-            toolWindow.activate {
-                val selectedContent = toolWindow.contentManager.selectedContent ?: return@activate
-                val tabInfo = TerminalToolWindowTabsManager.getInstance(proj).tabs
-                    .firstOrNull { it.content == selectedContent } ?: return@activate
-                tabInfo.view.component.requestFocusInWindow()
-                tabInfo.view.createSendTextBuilder().shouldExecute().send(command)
+    // ── Icon loading ──────────────────────────────────────────────────────────
+
+    /**
+     * Loads an icon for a known issue type, caching to disk as <typeName>.png.
+     * Falls back to [url] if typeName cache file doesn't exist yet.
+     * Used for both badge icons and ticket card row icons.
+     */
+    fun loadTicketTypeIconAsync(
+        typeName: String,
+        url: String?,
+        size: Int,
+        onLoaded: (ImageIcon) -> Unit
+    ) {
+        // Memory cache hit
+        typeIconMemCache[typeName]?.let { onLoaded(it); return }
+        if (typeIconMemCache.containsKey(typeName)) return  // already in-flight (null sentinel)
+        typeIconMemCache[typeName] = null
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val cw = cwDir()
+            var img: ImageIcon? = null
+
+            if (cw != null) {
+                val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
+                if (cacheFile.exists()) {
+                    img = loadAndScaleFile(cacheFile, size)
+                }
             }
+
+            if (img == null && !url.isNullOrBlank()) {
+                img =
+                    CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, false)
+                // Write to type-name cache file
+                if (img != null && cw != null) {
+                    try {
+                        val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
+                        cacheFile.parentFile.mkdirs()
+                        val raw = javax.imageio.ImageIO.read(java.net.URL(url))
+                        if (raw != null) ImageIO.write(raw, "png", cacheFile)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            if (img != null) {
+                typeIconMemCache[typeName] = img
+                val finalImg = img
+                SwingUtilities.invokeLater { onLoaded(finalImg) }
+            }
+        }
+    }
+
+    /** Generic icon loader keyed by URL; used for priority icons etc. */
+    private fun loadIconAsync(url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
+        if (url.isNullOrBlank()) return
+        memIconCache[url]?.let { onLoaded(it); return }
+        if (memIconCache.containsKey(url)) return
+        memIconCache[url] = null
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val workDir = project.basePath?.let { File(it) }
+            val img = CardUtils.fetchRemoteIcon(url, size, workDir, true)
+            if (img != null) {
+                memIconCache[url] = img
+                SwingUtilities.invokeLater { onLoaded(img) }
+            }
+        }
+    }
+
+    private fun loadAndScaleFile(file: File, size: Int): ImageIcon? {
+        return try {
+            val raw = ImageIO.read(file) ?: return null
+            val buf =
+                java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+            val g = buf.createGraphics()
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g.setRenderingHint(
+                RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BILINEAR
+            )
+            g.drawImage(raw.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
+            g.dispose()
+            ImageIcon(buf)
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -697,18 +779,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    private fun doTransitionBacklog(key: String) {
-        setStatus("$key → Backlog…")
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.transitionTicket(key, "Backlog")
-            SwingUtilities.invokeLater {
-                if (result.isSuccess) {
-                    setStatus("✓ $key → Backlog"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-            }
-        }
-    }
-
     private fun doTransitionInProgress(key: String) {
         setStatus("$key → In Progress…")
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -725,37 +795,18 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         statusLabel.text = text
     }
 
-    private fun loadIconAsync(url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
-        if (url.isNullOrBlank()) return
-        val cached = iconCache[url]
-        if (cached != null) {
-            onLoaded(cached); return
-        }
-        if (iconCache.containsKey(url)) return
-        iconCache[url] = null
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val workDir = project.basePath?.let { java.io.File(it) }
-            val img = CardUtils.fetchRemoteIcon(url, size, workDir, true)
-            if (img != null) {
-                iconCache[url] = img
-                SwingUtilities.invokeLater { onLoaded(img) }
-            }
-        }
-    }
+    // ── Group badge deactivation ──────────────────────────────────────────────
 
     fun deactivateGroupExcept(group: String, except: JLabel) {
         listOf(badgeMyTasks, badgeUnassigned)
             .filter { it != except && it.getClientProperty("group") == group }
-            .forEach {
-                it.putClientProperty("active", false)
-                TicketsPanel.applyBadgeStyle(it)
-                it.repaint()
-            }
+            .forEach { it.putClientProperty("active", false); applyBadgeStyle(it); it.repaint() }
     }
 
     // ── Badge factory (companion) ─────────────────────────────────────────────
 
     companion object {
+
         fun makeBadge(text: String, initiallyActive: Boolean): JLabel {
             val label = JLabel(text)
             label.font = label.font.deriveFont(label.font.size - 2f)
@@ -768,6 +819,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                     val nowActive = label.getClientProperty("active") != true
                     label.putClientProperty("active", nowActive)
                     applyBadgeStyle(label); label.repaint()
+
                     val group = label.getClientProperty("group") as? String
                     if (nowActive && group != null) {
                         var p = label.parent
@@ -778,13 +830,10 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                             p = p.parent
                         }
                     }
-                    // Update header count, then refresh
                     var p = label.parent
                     while (p != null) {
                         if (p is TicketsPanel) {
-                            p.onFilterBadgeChanged()
-                            p.refresh()
-                            break
+                            p.onFilterBadgeChanged(); p.refresh(); break
                         }
                         p = p.parent
                     }
@@ -806,21 +855,18 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             val hovered = label.getClientProperty("hovered") == true
             when {
                 active -> {
-                    label.background = Color(24, 95, 165)
-                    label.foreground = Color.WHITE
-                    label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(24, 95, 165); label.foreground =
+                        Color.WHITE; label.border = JBUI.Borders.empty(3, 8)
                 }
 
                 hovered -> {
-                    label.background = Color(210, 228, 248)
-                    label.foreground = Color(24, 95, 165)
-                    label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(210, 228, 248); label.foreground =
+                        Color(24, 95, 165); label.border = JBUI.Borders.empty(3, 8)
                 }
 
                 else -> {
-                    label.background = Color(225, 223, 218)
-                    label.foreground = Color(110, 108, 103)
-                    label.border = JBUI.Borders.empty(3, 8)
+                    label.background = Color(225, 223, 218); label.foreground =
+                        Color(110, 108, 103); label.border = JBUI.Borders.empty(3, 8)
                 }
             }
         }
