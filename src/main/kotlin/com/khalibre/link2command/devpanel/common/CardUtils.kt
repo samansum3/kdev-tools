@@ -35,8 +35,14 @@ object CardUtils {
         }
     }
 
-    fun makeTransitionButton(targetStatus: String, action: () -> Unit): JButton =
-        makeActionButton("→ $targetStatus", action)
+    fun makeTransitionButton(
+        targetStatus: String,
+        tooltip: String? = null,
+        action: () -> Unit
+    ): JButton =
+        makeActionButton("→ $targetStatus", action).also {
+            if (tooltip != null) it.toolTipText = tooltip
+        }
 
     // Per-group selection state — key is a group tag (e.g. "tickets", "pr"), value is the selected card key
     private val selectedCards = mutableMapOf<String, JPanel?>()
