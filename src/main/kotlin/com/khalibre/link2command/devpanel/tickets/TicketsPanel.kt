@@ -82,6 +82,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private var currentUserEmail: String? = null
     private val iconCache = mutableMapOf<String, ImageIcon?>()
+    private val transitionsCache = mutableMapOf<String, List<Pair<String, String>>>()
 
     // Debounce: fires 300 ms after the last badge toggle
     private var debounceTimer: javax.swing.Timer? = null
@@ -600,50 +601,59 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
-        val status = ticket.status
         val isUnassigned = ticket.assigneeName == null
-        if (isUnassigned || status == "Failed QA")
+
+        // Always-visible: Pick (if applicable) and View
+        if (isUnassigned || ticket.status == "Failed QA")
             panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
-        if (isMe && status == "Ready for Dev")
-            panel.add(CardUtils.makeTransitionButton("Backlog") { doTransitionBacklog(ticket.key) })
-        if (isMe && status in listOf(
-                "Deployed to UAT",
-                "Pending QA",
-                "Failed QA",
-                "Merged",
-                "Ready for Dev"
-            )
-        )
-            panel.add(CardUtils.makeTransitionButton("In Progress") { doTransitionInProgress(ticket.key) })
-        if (isMe && status == "In Progress")
-            panel.add(CardUtils.makeTransitionButton("PR Open") {
-                doTransition(
-                    ticket.key,
-                    "PR Open"
-                )
-            })
-        if (isMe && status == "PR Open")
-            panel.add(CardUtils.makeTransitionButton("Merged") {
-                doTransition(
-                    ticket.key,
-                    "Merged"
-                )
-            })
-        if (status == "Merged")
-            panel.add(CardUtils.makeTransitionButton("Deployed UAT") {
-                doTransition(
-                    ticket.key,
-                    "Deployed to UAT"
-                )
-            })
-        if (status == "Deployed to UAT")
-            panel.add(CardUtils.makeTransitionButton("Pending QA") {
-                doTransition(
-                    ticket.key,
-                    "Pending QA"
-                )
-            })
         panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
+
+        // Transition buttons — loaded from Jira dynamically, cached after first fetch
+        val cacheKey = "${ticket.key}-${ticket.status}-${ticket.assigneeName}"
+        val cached = transitionsCache[cacheKey]
+        if (cached != null) {
+            renderTransitionButtons(panel, ticket, isMe, cached)
+        } else {
+            val loadingLabel = JBLabel("…").apply {
+                font = font.deriveFont(font.size - 1f)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                border = JBUI.Borders.empty(0, 4)
+            }
+            panel.add(loadingLabel)
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val transitions = JiraService.fetchAvailableTransitions(ticket.key)
+                transitionsCache[cacheKey] = transitions
+                SwingUtilities.invokeLater {
+                    panel.remove(loadingLabel)
+                    renderTransitionButtons(panel, ticket, isMe, transitions)
+                    panel.revalidate(); panel.repaint()
+                    var p: java.awt.Container? = panel.parent
+                    while (p != null) {
+                        p.revalidate(); if (p is JPanel && p.layout is GridBagLayout) break; p =
+                            p.parent
+                    }
+                }
+            }
+        }
+    }
+
+    private fun renderTransitionButtons(
+        panel: JPanel, ticket: JiraTicket, isMe: Boolean, transitions: List<Pair<String, String>>
+    ) {
+        transitions.forEach { (targetStatus, transitionName) ->
+            val btn = if (targetStatus == "In Progress") {
+                CardUtils.makeTransitionButton(
+                    targetStatus,
+                    transitionName
+                ) { doTransitionInProgress(ticket.key) }
+            } else {
+                CardUtils.makeTransitionButton(
+                    targetStatus,
+                    transitionName
+                ) { doTransition(ticket.key, targetStatus) }
+            }
+            panel.add(btn)
+        }
     }
 
     private fun runInTerminal(command: String) {
