@@ -8,6 +8,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.CardUtils
+import com.khalibre.link2command.devpanel.config.DevConfig
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -75,10 +76,29 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private var pendingFilterState: Map<String, Boolean> = emptyMap()
 
+    // ── JiraMetaCache listener ────────────────────────────────────────────────
+
+    // Keep a reference so we can remove it on dispose
+    private val metaListener: (JiraMetaCache.State) -> Unit = { state ->
+        // Always on EDT (guaranteed by JiraMetaCache)
+        rebuildDynamicBadges(state.statuses, state.types)
+        applyPendingFilterState()
+        onFilterBadgeChanged()
+    }
+
     init {
         border = JBUI.Borders.empty(8, 10)
         buildUi()
-        loadMetaAndRestoreFilters()
+        loadFilterStateFromDisk()
+        JiraMetaCache.addListener(metaListener)
+        // Trigger initial load — if already cached, callback fires immediately
+        val cw = cwDir()
+        if (cw != null) JiraMetaCache.load(cw)
+    }
+
+    override fun removeNotify() {
+        super.removeNotify()
+        JiraMetaCache.removeListener(metaListener)
     }
 
     // ── git/cw ────────────────────────────────────────────────────────────────
@@ -95,23 +115,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
 
-    // ── Meta loading ──────────────────────────────────────────────────────────
-
-    fun loadMetaAndRestoreFilters() {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val cw = cwDir()
-            val statuses = if (cw != null) JiraMetaService.loadStatuses(cw) else emptyList()
-            val types = if (cw != null) JiraMetaService.loadTypes(cw) else emptyList()
-            SwingUtilities.invokeLater {
-                rebuildDynamicBadges(statuses, types)
-                applyPendingFilterState()
-                onFilterBadgeChanged()
-            }
-        }
-    }
-
-    fun reloadMetaBadges() = loadMetaAndRestoreFilters()
-
     // ── Dynamic badges ────────────────────────────────────────────────────────
 
     private fun rebuildDynamicBadges(
@@ -119,7 +122,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         allTypes: List<JiraMetaService.IssueTypeInfo>
     ) {
         // Always re-read config so excluded lists reflect latest saved Ticket Config
-        val cfg = com.khalibre.link2command.devpanel.config.DevConfig.load().ticket
+        val cfg = DevConfig.load().ticket
         val excludedStatuses = cfg.excludedStatuses.toSet()
         val excludedTypes = cfg.excludedTypes.toSet()
 

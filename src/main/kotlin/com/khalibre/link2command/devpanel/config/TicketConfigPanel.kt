@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.tickets.JiraMetaCache
 import com.khalibre.link2command.devpanel.tickets.JiraMetaService
 import com.khalibre.link2command.devpanel.tickets.TicketsPanel
 import com.khalibre.link2command.devpanel.tickets.WrapLayout
@@ -84,21 +85,21 @@ class TicketConfigPanel(
         // ── Excluded statuses ────────────────────────────────────────────────
         form.add(
             buildCollapsibleExcludedSection(
-            label = "Excluded statuses",
-            hint = "hidden from Status filter badges",
-            wrapPanel = excludedStatusWrap,
-            getBadges = { excludedStatusBadges }
-        ).also { excludedStatusHeader = it })
+                label = "Excluded statuses",
+                hint = "hidden from Status filter badges",
+                wrapPanel = excludedStatusWrap,
+                getBadges = { excludedStatusBadges }
+            ).also { excludedStatusHeader = it })
         form.add(Box.createVerticalStrut(12))
 
         // ── Excluded types ───────────────────────────────────────────────────
         form.add(
             buildCollapsibleExcludedSection(
-            label = "Excluded types",
-            hint = "hidden from type / not-type filter badges",
-            wrapPanel = excludedTypeWrap,
-            getBadges = { excludedTypeBadges }
-        ).also { excludedTypeHeader = it })
+                label = "Excluded types",
+                hint = "hidden from type / not-type filter badges",
+                wrapPanel = excludedTypeWrap,
+                getBadges = { excludedTypeBadges }
+            ).also { excludedTypeHeader = it })
         form.add(Box.createVerticalStrut(20))
 
         // ── ACTIONS ──────────────────────────────────────────────────────────
@@ -491,6 +492,10 @@ class TicketConfigPanel(
         )
         setStatus("Saved ✓")
         Timer(2500) { setStatus("") }.apply { isRepeats = false; start() }
+        val cw = getCwDir()
+        if (cw != null) {
+            JiraMetaCache.notifyConfigChanged(cw)
+        }
     }
 
     // ── Reload actions ────────────────────────────────────────────────────────
@@ -508,7 +513,7 @@ class TicketConfigPanel(
                     applyConfig(DevConfig.load().ticket)
                     setStatus(if (statuses.isEmpty()) "No statuses returned — check Jira credentials." else "Statuses reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
-                    getTicketsPanel()?.reloadMetaBadges()
+                    JiraMetaCache.notifyConfigChanged(cw)
                 }
             } else SwingUtilities.invokeLater { setStatus("No git repo found.") }
         }
@@ -527,7 +532,7 @@ class TicketConfigPanel(
                     applyConfig(DevConfig.load().ticket)
                     setStatus(if (types.isEmpty()) "No types returned — check Jira credentials." else "Types reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
-                    getTicketsPanel()?.reloadMetaBadges()
+                    JiraMetaCache.notifyConfigChanged(cw)
                 }
             } else SwingUtilities.invokeLater { setStatus("No git repo found.") }
         }
