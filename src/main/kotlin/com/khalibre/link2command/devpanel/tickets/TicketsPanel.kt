@@ -21,7 +21,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
-    // owner (mutually exclusive)
+    // owner badges (mutually exclusive)
     private val badgeMyTasks =
         makeBadge("My Tasks", false).also { it.putClientProperty("group", "owner") }
     private val badgeUnassigned =
@@ -29,7 +29,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val badgeHideDone = makeBadge("Hide Done", false)
 
     // Dynamic badges — rebuilt when meta is loaded
-    private var statusBadges: List<JLabel> = emptyList()   // one per visible Jira status
+    private var statusBadges: List<JLabel> = emptyList()
     private var typeBadges: List<JLabel> = emptyList()
     private var notTypeBadges: List<JLabel> = emptyList()
     private var visibleStatuses: List<String> = emptyList()
@@ -42,7 +42,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private lateinit var filtersBody: JPanel
     private lateinit var filterToggleLabel: JLabel
 
-    // Search
     private val searchField = JBTextField().apply {
         toolTipText = "Search by summary or key..."; emptyText.text = "Search by summary or key..."
     }
@@ -61,17 +60,17 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private var currentUserEmail: String? = null
 
-    // icon caches
-    private val memIconCache =
-        mutableMapOf<String, ImageIcon?>()      // url  → icon (priority/generic)
-    private val typeIconMemCache = mutableMapOf<String, ImageIcon?>()  // typeName → icon
+    // Icon memory caches
+    // typeName → list of pending callbacks (supports multiple badges per type)
+    private val typeIconCallbacks = mutableMapOf<String, MutableList<(ImageIcon) -> Unit>>()
+    private val typeIconMemCache = mutableMapOf<String, ImageIcon>()   // typeName → resolved icon
+    private val memIconCache = mutableMapOf<String, ImageIcon?>()  // url → icon (priority etc.)
 
     private val transitionsCache = mutableMapOf<String, List<Pair<String, String>>>()
     private var debounceTimer: Timer? = null
     private val DEBOUNCE_MS = 300
     private val requestGeneration = AtomicLong(0)
 
-    // ── Saved badge state from filters.json, applied once badges are built ──
     private var pendingFilterState: Map<String, Boolean> = emptyMap()
 
     init {
@@ -80,7 +79,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         loadMetaAndRestoreFilters()
     }
 
-    // ── git/cw helpers ───────────────────────────────────────────────────────
+    // ── git/cw ────────────────────────────────────────────────────────────────
 
     private fun gitRoot(): File? {
         val base = project.basePath ?: return null
@@ -94,35 +93,24 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
 
-    // ── Meta loading ─────────────────────────────────────────────────────────
+    // ── Meta loading ──────────────────────────────────────────────────────────
 
-    /**
-     * Loads Jira statuses + types from cache (or Jira if cache absent),
-     * then rebuilds the badge rows and restores persisted filter state.
-     * Always runs on a pooled thread; UI updates on EDT.
-     */
     fun loadMetaAndRestoreFilters() {
         ApplicationManager.getApplication().executeOnPooledThread {
             val cw = cwDir()
             val statuses = if (cw != null) JiraMetaService.loadStatuses(cw) else emptyList()
             val types = if (cw != null) JiraMetaService.loadTypes(cw) else emptyList()
-
             SwingUtilities.invokeLater {
                 rebuildDynamicBadges(statuses, types)
-                // Restore persisted filter state (may have been loaded already from file)
                 applyPendingFilterState()
                 onFilterBadgeChanged()
             }
         }
     }
 
-    /**
-     * Called externally by TicketConfigPanel after a forced reload of statuses or types,
-     * so the badge rows reflect the fresh data immediately.
-     */
     fun reloadMetaBadges() = loadMetaAndRestoreFilters()
 
-    // ── Dynamic badge construction ────────────────────────────────────────────
+    // ── Dynamic badges ────────────────────────────────────────────────────────
 
     private fun rebuildDynamicBadges(
         allStatuses: List<String>,
@@ -135,14 +123,10 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         visibleStatuses = allStatuses.filter { it !in excludedStatuses }
         visibleTypeInfos = allTypes.filter { it.name !in excludedTypes }
 
-        // Build status badges
         statusBadges = visibleStatuses.map { name -> makeBadge(name, false) }
-
-        // Build type badges — with icon placeholder on the left
         typeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
         notTypeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
 
-        // Rebuild wrap panels
         statusWrap.removeAll()
         statusBadges.forEach { statusWrap.add(it) }
         statusWrap.add(badgeHideDone)
@@ -160,22 +144,21 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Creates a badge JLabel that includes a small type icon on its left side.
-     * The icon is loaded asynchronously and cached by type name.
+     * Badge with a small type icon on the left.
+     * Uses multi-callback icon loading so both typeBadges and notTypeBadges
+     * for the same type both receive the icon independently.
      */
     private fun makeTypeBadge(info: JiraMetaService.IssueTypeInfo): JLabel {
         val badge = makeBadge(info.name, false)
-        // Load icon and prepend it
         loadTicketTypeIconAsync(info.name, info.iconUrl, 12) { icon ->
             badge.icon = icon
             badge.iconTextGap = 3
-            badge.revalidate()
-            badge.repaint()
+            badge.revalidate(); badge.repaint()
         }
         return badge
     }
 
-    // ── Persistence ──────────────────────────────────────────────────────────
+    // ── Persistence ───────────────────────────────────────────────────────────
 
     private fun loadFilterStateFromDisk() {
         val cw = cwDir() ?: return
@@ -207,7 +190,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun applyPendingFilterState() {
         val map = pendingFilterState
         if (map.isEmpty()) return
-
         fun restore(badge: JLabel, key: String) {
             badge.putClientProperty("active", map[key] ?: false)
             applyBadgeStyle(badge)
@@ -215,7 +197,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         restore(badgeMyTasks, "myTasks")
         restore(badgeUnassigned, "unassigned")
         restore(badgeHideDone, "hideDone")
-
         statusBadges.zip(visibleStatuses).forEach { (b, n) -> restore(b, "status_$n") }
         typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "type_${i.name}") }
         notTypeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "notType_${i.name}") }
@@ -227,12 +208,12 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val keys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-        val parentFile = File(cw, "parent-tickets")
-        if (keys.isNotEmpty()) parentFile.writeText(keys.joinToString("\n")) else parentFile.delete()
+        if (keys.isNotEmpty()) File(cw, "parent-tickets").writeText(keys.joinToString("\n"))
+        else File(cw, "parent-tickets").delete()
 
         val ver = fixVersionField.text.trim()
-        val versionFile = File(cw, "fix-version")
-        if (ver.isNotBlank()) versionFile.writeText(ver) else versionFile.delete()
+        if (ver.isNotBlank()) File(cw, "fix-version").writeText(ver)
+        else File(cw, "fix-version").delete()
 
         fun active(b: JLabel) = b.getClientProperty("active") == true
         val map = mutableMapOf(
@@ -289,7 +270,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         topPanel.add(searchRow)
         topPanel.add(Box.createVerticalStrut(6))
 
-        // Build wrap panels (empty now, filled after meta load)
+        // Badge wrap panels (empty until meta loaded)
         statusWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
         typeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
         notTypeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
@@ -316,7 +297,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
         })
 
-        // Load persisted state (badges not built yet; will be applied in applyPendingFilterState)
         loadFilterStateFromDisk()
     }
 
@@ -352,7 +332,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         filtersBody =
             JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
-
         filtersBody.add(
             filterSection(
                 "owner",
@@ -366,7 +345,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         filtersBody.add(filterSection("type", emptyList(), prebuiltWrap = typeWrap))
         filtersBody.add(Box.createVerticalStrut(4))
         filtersBody.add(filterSection("not type", emptyList(), prebuiltWrap = notTypeWrap))
-
         container.add(filtersBody)
         return container
     }
@@ -378,8 +356,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
         }, BorderLayout.NORTH)
         val wrap = prebuiltWrap ?: JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
-            isOpaque = false
-            badges.forEach { add(it) }
+            isOpaque = false; badges.forEach { add(it) }
         }
         p.add(wrap, BorderLayout.CENTER)
         return p
@@ -401,8 +378,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun allFilterBadges(): List<JLabel> =
-        listOf(badgeMyTasks, badgeUnassigned, badgeHideDone) +
-                statusBadges + typeBadges + notTypeBadges
+        listOf(
+            badgeMyTasks,
+            badgeUnassigned,
+            badgeHideDone
+        ) + statusBadges + typeBadges + notTypeBadges
 
     fun onFilterBadgeChanged() {
         filterToggleLabel.text = filterHeaderText()
@@ -494,18 +474,15 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun buildFilters(): TicketFilters {
         val parentKeys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-
         val activeStatuses = statusBadges.zip(visibleStatuses)
-            .filter { (badge, _) -> badge.getClientProperty("active") == true }
-            .map { (_, name) -> name }.toSet()
-
+            .filter { (b, _) -> b.getClientProperty("active") == true }
+            .map { (_, n) -> n }.toSet()
         val activeTypes = typeBadges.zip(visibleTypeInfos)
-            .filter { (badge, _) -> badge.getClientProperty("active") == true }
-            .map { (_, info) -> info.name }.toSet()
-
+            .filter { (b, _) -> b.getClientProperty("active") == true }
+            .map { (_, i) -> i.name }.toSet()
         val activeNotTypes = notTypeBadges.zip(visibleTypeInfos)
-            .filter { (badge, _) -> badge.getClientProperty("active") == true }
-            .map { (_, info) -> info.name }.toSet()
+            .filter { (b, _) -> b.getClientProperty("active") == true }
+            .map { (_, i) -> i.name }.toSet()
 
         fun active(b: JLabel) = b.getClientProperty("active") == true
         return TicketFilters(
@@ -556,7 +533,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         ticket.issueType?.let { typeName ->
             val iconLabel =
                 JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = typeName }
-            // Use type-name cache first, fall back to URL-based cache
             loadTicketTypeIconAsync(typeName, ticket.issueTypeIconUrl, 14) {
                 iconLabel.icon = it; metaPanel.repaint()
             }
@@ -595,16 +571,31 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         gbc.gridy = 1; card.add(metaPanel, gbc)
 
         // Row 2: action buttons — WrapLayout so they wrap when panel is narrow
+        // We use a wrapper panel whose height auto-fits via a ComponentListener on the card.
         val actionPanel = JPanel(WrapLayout(FlowLayout.LEFT, 2, 2)).apply {
-            isOpaque = false; border = JBUI.Borders.emptyLeft(-5)
+            isOpaque = false
+            border = JBUI.Borders.emptyLeft(-4)
         }
         addTicketActions(actionPanel, ticket, isMe)
         gbc.gridy = 2; card.add(actionPanel, gbc)
 
-        card.addHierarchyListener {
-            card.maximumSize = Dimension(Int.MAX_VALUE, card.preferredSize.height)
-        }
+        // Keep card max-height in sync whenever the actionPanel reflows
+        actionPanel.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = syncCardHeight(card)
+        })
+        card.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = syncCardHeight(card)
+        })
+
         return card
+    }
+
+    /** Force the card's maximumSize height to match its current preferredSize after layout. */
+    private fun syncCardHeight(card: JPanel) {
+        val ph = card.preferredSize.height
+        if (card.maximumSize.height != ph) {
+            card.maximumSize = Dimension(Int.MAX_VALUE, ph)
+        }
     }
 
     private fun sepLabel() = JBLabel("  ·  ").apply {
@@ -636,11 +627,12 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                     panel.remove(loadingLabel)
                     renderTransitionButtons(panel, ticket, isMe, transitions)
                     panel.revalidate(); panel.repaint()
-                    // Propagate size change up the card
+                    // Trigger height sync up the hierarchy
                     var p: Container? = panel.parent
                     while (p != null) {
-                        p.revalidate()
-                        if (p is JPanel && p.layout is GridBagLayout) break
+                        if (p is JPanel && p.layout is GridBagLayout) {
+                            syncCardHeight(p); break
+                        }
                         p = p.parent
                     }
                 }
@@ -669,9 +661,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // ── Icon loading ──────────────────────────────────────────────────────────
 
     /**
-     * Loads an icon for a known issue type, caching to disk as <typeName>.png.
-     * Falls back to [url] if typeName cache file doesn't exist yet.
-     * Used for both badge icons and ticket card row icons.
+     * Multi-callback icon loader keyed by type name → <typeName>.png disk cache.
+     * Multiple callers for the same typeName all get notified when the icon resolves.
      */
     fun loadTicketTypeIconAsync(
         typeName: String,
@@ -679,10 +670,16 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         size: Int,
         onLoaded: (ImageIcon) -> Unit
     ) {
-        // Memory cache hit
-        typeIconMemCache[typeName]?.let { onLoaded(it); return }
-        if (typeIconMemCache.containsKey(typeName)) return  // already in-flight (null sentinel)
-        typeIconMemCache[typeName] = null
+        // Already resolved
+        typeIconMemCache[typeName]?.let { icon ->
+            // Re-scale if needed (different size requests)
+            onLoaded(scaleIcon(icon, size)); return
+        }
+
+        // Queue the callback; if first caller, kick off the load
+        val callbacks = typeIconCallbacks.getOrPut(typeName) { mutableListOf() }
+        callbacks += onLoaded
+        if (callbacks.size > 1) return  // load already in flight
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val cw = cwDir()
@@ -690,43 +687,55 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
             if (cw != null) {
                 val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
-                if (cacheFile.exists()) {
-                    img = loadAndScaleFile(cacheFile, size)
-                }
+                if (cacheFile.exists()) img = loadAndScaleFile(cacheFile, size)
             }
 
             if (img == null && !url.isNullOrBlank()) {
                 img =
                     CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, false)
-                // Write to type-name cache file
+                // Persist to named cache file
                 if (img != null && cw != null) {
                     try {
                         val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
                         cacheFile.parentFile.mkdirs()
-                        val raw = javax.imageio.ImageIO.read(java.net.URL(url))
+                        val raw = ImageIO.read(java.net.URL(url))
                         if (raw != null) ImageIO.write(raw, "png", cacheFile)
                     } catch (_: Exception) {
                     }
                 }
             }
 
-            if (img != null) {
-                typeIconMemCache[typeName] = img
-                val finalImg = img
-                SwingUtilities.invokeLater { onLoaded(finalImg) }
+            val finalImg = img ?: return@executeOnPooledThread
+            typeIconMemCache[typeName] = finalImg
+
+            SwingUtilities.invokeLater {
+                typeIconCallbacks.remove(typeName)?.forEach { cb -> cb(scaleIcon(finalImg, size)) }
             }
         }
     }
 
-    /** Generic icon loader keyed by URL; used for priority icons etc. */
+    private fun scaleIcon(icon: ImageIcon, size: Int): ImageIcon {
+        if (icon.iconWidth == size && icon.iconHeight == size) return icon
+        val buf =
+            java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = buf.createGraphics()
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g.setRenderingHint(
+            RenderingHints.KEY_INTERPOLATION,
+            RenderingHints.VALUE_INTERPOLATION_BILINEAR
+        )
+        g.drawImage(icon.image.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
+        g.dispose()
+        return ImageIcon(buf)
+    }
+
     private fun loadIconAsync(url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
         if (url.isNullOrBlank()) return
         memIconCache[url]?.let { onLoaded(it); return }
         if (memIconCache.containsKey(url)) return
         memIconCache[url] = null
         ApplicationManager.getApplication().executeOnPooledThread {
-            val workDir = project.basePath?.let { File(it) }
-            val img = CardUtils.fetchRemoteIcon(url, size, workDir, true)
+            val img = CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, true)
             if (img != null) {
                 memIconCache[url] = img
                 SwingUtilities.invokeLater { onLoaded(img) }
@@ -803,7 +812,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             .forEach { it.putClientProperty("active", false); applyBadgeStyle(it); it.repaint() }
     }
 
-    // ── Badge factory (companion) ─────────────────────────────────────────────
+    // ── Badge factory ─────────────────────────────────────────────────────────
 
     companion object {
 
@@ -891,7 +900,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         return JLabel(status).apply {
             isOpaque = true; background = bg; foreground = fg
-            font = font.deriveFont(font.size - 2f); border = JBUI.Borders.empty(2, 6)
+            font = font.deriveFont(font.size - 2f)
+            border = JBUI.Borders.empty(2, 6)
         }
     }
 }

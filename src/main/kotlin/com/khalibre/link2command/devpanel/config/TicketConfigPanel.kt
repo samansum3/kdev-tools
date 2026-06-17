@@ -6,48 +6,60 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.tickets.JiraMetaService
 import com.khalibre.link2command.devpanel.tickets.TicketsPanel
+import com.khalibre.link2command.devpanel.tickets.WrapLayout
 import java.awt.*
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.io.File
 import javax.swing.*
 
 /**
- * "Ticket Config" sub-tab inside the Config tab.
+ * "Ticket Config" sub-tab.
  *
- * Sections
- * ────────
- * TICKETS
- *   Per-type done-status multi-selects  (one JBList per issue type)
- *   Excluded statuses multi-select      (hidden from Tickets > Status badges)
- *   Excluded types multi-select         (hidden from Tickets > type/not-type badges)
+ * Layout (top to bottom, all left-aligned):
  *
- * ACTIONS
- *   [Reload ticket statuses]  [Reload ticket types]
+ *  Per-type collapsible done-status sections:
+ *    [icon] <Type> done statuses (N) ▸/▾          ← header row, collapsed by default
+ *      [badge1] [badge2] …                         ← badge wrap, hidden when collapsed
+ *
+ *  Excluded statuses  (hidden from Status filter badges)
+ *    [badge1] [badge2] …
+ *
+ *  Excluded types  (hidden from type / not-type filter badges)
+ *    [badge1] [badge2] …
+ *
+ *  ACTIONS
+ *    [Reload ticket statuses]  [Reload ticket types]   <status text>
+ *
+ *  [Save Ticket Config]
  */
 class TicketConfigPanel(
     private val getTicketsPanel: () -> TicketsPanel?,
     private val getCwDir: () -> File?
 ) : JPanel(BorderLayout()) {
 
-    // ── State loaded from DevConfig ──────────────────────────────────────────
     private var allStatuses: List<String> = emptyList()
     private var allTypes: List<JiraMetaService.IssueTypeInfo> = emptyList()
 
-    // Dynamic per-type done-status selectors  (typeName → JList<String>)
-    private val doneStatusLists = mutableMapOf<String, JList<String>>()
+    // Per-type done-status badge maps  (typeName → list of JLabel badges)
+    private val doneStatusBadges = mutableMapOf<String, List<JLabel>>()
 
-    // Single excluded-status list and excluded-type list
-    private lateinit var excludedStatusList: JList<String>
-    private lateinit var excludedTypeList: JList<String>
+    // Excluded badge lists
+    private var excludedStatusBadges: List<JLabel> = emptyList()
+    private var excludedTypeBadges: List<JLabel> = emptyList()
 
-    // Container rebuilt when meta changes
-    private val doneStatusesContainer = JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        isOpaque = false
-    }
+    // Containers rebuilt when meta changes
+    private val doneStatusesContainer =
+        JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
+    private val excludedStatusWrap =
+        JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+    private val excludedTypeWrap =
+        JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
 
     private val statusLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        alignmentX = LEFT_ALIGNMENT
     }
 
     init {
@@ -61,51 +73,42 @@ class TicketConfigPanel(
     private fun buildUi() {
         val form = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
 
-        // ── TICKETS section label ────────────────────────────────────────────
-        form.add(sectionLabel("TICKETS"))
-        form.add(Box.createVerticalStrut(8))
-
-        // Placeholder — rebuilt by rebuildDoneStatusInputs() once meta is loaded
+        // ── Per-type done-status sections (rebuilt by rebuildDoneStatusSections) ──
         form.add(doneStatusesContainer)
         form.add(Box.createVerticalStrut(12))
 
         // ── Excluded statuses ────────────────────────────────────────────────
         form.add(fieldLabel("Excluded statuses  (hidden from Status filter badges)"))
         form.add(Box.createVerticalStrut(4))
-        excludedStatusList = buildCheckList(emptyList())
-        form.add(wrapInScrollPane(excludedStatusList, 120))
+        form.add(excludedStatusWrap.also { it.alignmentX = LEFT_ALIGNMENT })
         form.add(Box.createVerticalStrut(12))
 
         // ── Excluded types ───────────────────────────────────────────────────
         form.add(fieldLabel("Excluded types  (hidden from type / not-type filter badges)"))
         form.add(Box.createVerticalStrut(4))
-        excludedTypeList = buildCheckList(emptyList())
-        form.add(wrapInScrollPane(excludedTypeList, 120))
+        form.add(excludedTypeWrap.also { it.alignmentX = LEFT_ALIGNMENT })
         form.add(Box.createVerticalStrut(20))
 
-        // ── ACTIONS section ──────────────────────────────────────────────────
+        // ── ACTIONS ──────────────────────────────────────────────────────────
         form.add(sectionLabel("ACTIONS"))
         form.add(Box.createVerticalStrut(8))
 
-        val actionsRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply { isOpaque = false }
-        actionsRow.add(JButton("Reload ticket statuses").apply {
-            addActionListener { reloadStatuses() }
-        })
-        actionsRow.add(JButton("Reload ticket types").apply {
-            addActionListener { reloadTypes() }
-        })
+        val actionsRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            isOpaque = false; alignmentX = LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, 32)
+        }
+        actionsRow.add(JButton("Reload ticket statuses").apply { addActionListener { reloadStatuses() } })
+        actionsRow.add(JButton("Reload ticket types").apply { addActionListener { reloadTypes() } })
         form.add(actionsRow)
-        form.add(Box.createVerticalStrut(8))
+        form.add(Box.createVerticalStrut(6))
         form.add(statusLabel)
-
-        // ── Save button ──────────────────────────────────────────────────────
         form.add(Box.createVerticalStrut(16))
-        val saveBtn = JButton("Save Ticket Config").apply { addActionListener { saveConfig() } }
-        val saveRow =
-            JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { isOpaque = false; add(saveBtn) }
-        form.add(saveRow)
 
-        // Filler
+        // ── Save ─────────────────────────────────────────────────────────────
+        val saveBtn = JButton("Save Ticket Config").apply { addActionListener { saveConfig() } }
+        form.add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false; alignmentX = LEFT_ALIGNMENT; add(saveBtn)
+        })
         form.add(Box.createVerticalGlue())
 
         val scroll = JBScrollPane(form).apply {
@@ -127,76 +130,234 @@ class TicketConfigPanel(
             SwingUtilities.invokeLater {
                 allStatuses = statuses
                 allTypes = types
-                rebuildListModels()
+                rebuildAll()
                 applyConfig(DevConfig.load().ticket)
                 setStatus(
                     if (statuses.isEmpty() && types.isEmpty())
-                        "No cached data — configure Jira credentials in Config and click Reload." else ""
+                        "No cached data — configure Jira credentials and click Reload." else ""
                 )
             }
         }
     }
 
-    // ── Rebuild list models when meta changes ─────────────────────────────────
-
-    private fun rebuildListModels() {
-        // Excluded status list
-        replaceListModel(excludedStatusList, allStatuses)
-
-        // Excluded type list
-        replaceListModel(excludedTypeList, allTypes.map { it.name })
-
-        // Per-type done-status selectors
-        rebuildDoneStatusInputs()
+    private fun rebuildAll() {
+        rebuildDoneStatusSections()
+        rebuildExcludedBadges()
     }
 
-    private fun rebuildDoneStatusInputs() {
+    // ── Per-type done-status collapsible sections ─────────────────────────────
+
+    private fun rebuildDoneStatusSections() {
         doneStatusesContainer.removeAll()
-        doneStatusLists.clear()
+        doneStatusBadges.clear()
 
         if (allTypes.isEmpty()) {
-            doneStatusesContainer.add(JBLabel("<html><i>No type data cached. Click \"Reload ticket types\".</i></html>").apply {
+            doneStatusesContainer.add(JBLabel("<html><i>No type data cached — click \"Reload ticket types\".</i></html>").apply {
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
                 border = JBUI.Borders.empty(4, 0)
+                alignmentX = LEFT_ALIGNMENT
             })
         } else {
             allTypes.forEach { typeInfo ->
-                doneStatusesContainer.add(fieldLabel("${typeInfo.name} done statuses"))
-                doneStatusesContainer.add(Box.createVerticalStrut(3))
-                val list = buildCheckList(allStatuses)
-                doneStatusLists[typeInfo.name] = list
-                doneStatusesContainer.add(wrapInScrollPane(list, 100))
-                doneStatusesContainer.add(Box.createVerticalStrut(10))
+                doneStatusesContainer.add(buildDoneStatusSection(typeInfo))
+                doneStatusesContainer.add(Box.createVerticalStrut(6))
             }
         }
         doneStatusesContainer.revalidate()
         doneStatusesContainer.repaint()
     }
 
-    // ── Apply saved config to UI ──────────────────────────────────────────────
+    private fun buildDoneStatusSection(typeInfo: JiraMetaService.IssueTypeInfo): JPanel {
+        val container = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false; alignmentX =
+            LEFT_ALIGNMENT
+        }
+
+        // Badge wrap (starts hidden — collapsed by default)
+        val badgeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            isVisible = false
+        }
+        val badges = allStatuses.map { status -> makeConfigBadge(status, false) }
+        doneStatusBadges[typeInfo.name] = badges
+        badges.forEach { badgeWrap.add(it) }
+
+        // Header row
+        val headerLabel = buildCollapsibleHeader(
+            typeName = typeInfo.name,
+            iconUrl = typeInfo.iconUrl,
+            badgeWrap = badgeWrap,
+            getBadges = { doneStatusBadges[typeInfo.name] ?: emptyList() }
+        )
+
+        // Wire badge clicks to refresh header count
+        badges.forEach { badge ->
+            badge.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    // Toggle handled by makeConfigBadge; refresh header after
+                    SwingUtilities.invokeLater {
+                        refreshDoneStatusHeader(
+                            headerLabel,
+                            typeInfo.name
+                        )
+                    }
+                }
+            })
+        }
+
+        container.add(headerLabel)
+        container.add(badgeWrap)
+        return container
+    }
+
+    /**
+     * Builds a header row: [type icon?] <Type> done statuses (N) ▸/▾
+     * Clicking toggles the badgeWrap visibility.
+     */
+    private fun buildCollapsibleHeader(
+        typeName: String,
+        iconUrl: String,
+        badgeWrap: JPanel,
+        getBadges: () -> List<JLabel>
+    ): JPanel {
+        var expanded = false
+
+        val iconLabel = JLabel().apply { preferredSize = Dimension(14, 14) }
+        loadTypeIcon(typeName, iconUrl, 14) { iconLabel.icon = it; iconLabel.repaint() }
+
+        val textLabel = JLabel(headerText(typeName, getBadges(), expanded)).apply {
+            font = font.deriveFont(font.size - 1f)
+            foreground = JBUI.CurrentTheme.Label.foreground()
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        }
+
+        val row = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, 24)
+            add(iconLabel)
+            add(textLabel)
+        }
+
+        val clickHandler = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                expanded = !expanded
+                badgeWrap.isVisible = expanded
+                textLabel.text = headerText(typeName, getBadges(), expanded)
+                badgeWrap.revalidate(); badgeWrap.repaint()
+                row.parent?.revalidate(); row.parent?.repaint()
+            }
+
+            override fun mouseEntered(e: MouseEvent) {
+                textLabel.foreground = Color(24, 95, 165)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                textLabel.foreground = JBUI.CurrentTheme.Label.foreground()
+            }
+        }
+        row.addMouseListener(clickHandler)
+        textLabel.addMouseListener(clickHandler)
+
+        // Tag the row so we can find and refresh its text label later
+        row.putClientProperty("typeName", typeName)
+        row.putClientProperty("textLabel", textLabel)
+        row.putClientProperty("expanded", expanded)
+        row.putClientProperty("getBadges", getBadges)
+
+        return row
+    }
+
+    /** Refreshes the header label text (selected count) without toggling expansion. */
+    private fun refreshDoneStatusHeader(headerRow: JPanel, typeName: String) {
+        val textLabel = headerRow.getClientProperty("textLabel") as? JLabel ?: return
+
+        @Suppress("UNCHECKED_CAST")
+        val getBadges = headerRow.getClientProperty("getBadges") as? () -> List<JLabel> ?: return
+        val expanded = headerRow.getClientProperty("expanded") as? Boolean ?: false
+        textLabel.text = headerText(typeName, getBadges(), expanded)
+    }
+
+    private fun headerText(typeName: String, badges: List<JLabel>, expanded: Boolean): String {
+        val selected = badges.count { it.getClientProperty("active") == true }
+        val count = if (selected > 0) " ($selected)" else ""
+        val caret = if (expanded) "▾" else "▸"
+        return "$typeName done statuses$count  $caret"
+    }
+
+    // ── Excluded badge sections ───────────────────────────────────────────────
+
+    private fun rebuildExcludedBadges() {
+        excludedStatusBadges = allStatuses.map { makeConfigBadge(it, false) }
+        excludedStatusWrap.removeAll()
+        excludedStatusBadges.forEach { excludedStatusWrap.add(it) }
+        excludedStatusWrap.revalidate(); excludedStatusWrap.repaint()
+
+        excludedTypeBadges = allTypes.map { info ->
+            makeConfigBadge(info.name, false).also { badge ->
+                loadTypeIcon(info.name, info.iconUrl, 12) { icon ->
+                    badge.icon = icon
+                    badge.iconTextGap = 3
+                    badge.revalidate(); badge.repaint()
+                }
+            }
+        }
+        excludedTypeWrap.removeAll()
+        excludedTypeBadges.forEach { excludedTypeWrap.add(it) }
+        excludedTypeWrap.revalidate(); excludedTypeWrap.repaint()
+    }
+
+    // ── Apply saved config ────────────────────────────────────────────────────
 
     private fun applyConfig(cfg: TicketConfig) {
         // Per-type done statuses
-        doneStatusLists.forEach { (typeName, list) ->
-            val saved = cfg.doneStatusesByType[typeName] ?: emptyList()
-            selectItemsInList(list, saved)
+        doneStatusBadges.forEach { (typeName, badges) ->
+            val saved = cfg.doneStatusesByType[typeName]?.toSet() ?: emptySet()
+            badges.zip(allStatuses).forEach { (badge, status) ->
+                badge.putClientProperty("active", status in saved)
+                TicketsPanel.applyBadgeStyle(badge)
+            }
         }
-
         // Excluded statuses
-        selectItemsInList(excludedStatusList, cfg.excludedStatuses)
-
+        val excStatuses = cfg.excludedStatuses.toSet()
+        excludedStatusBadges.zip(allStatuses).forEach { (badge, status) ->
+            badge.putClientProperty("active", status in excStatuses)
+            TicketsPanel.applyBadgeStyle(badge)
+        }
         // Excluded types
-        selectItemsInList(excludedTypeList, cfg.excludedTypes)
+        val excTypes = cfg.excludedTypes.toSet()
+        excludedTypeBadges.zip(allTypes).forEach { (badge, info) ->
+            badge.putClientProperty("active", info.name in excTypes)
+            TicketsPanel.applyBadgeStyle(badge)
+        }
+        // Refresh all done-status header labels to show correct counts
+        refreshAllDoneHeaders()
+    }
+
+    private fun refreshAllDoneHeaders() {
+        for (i in 0 until doneStatusesContainer.componentCount) {
+            val section = doneStatusesContainer.getComponent(i) as? JPanel ?: continue
+            for (j in 0 until section.componentCount) {
+                val child = section.getComponent(j) as? JPanel ?: continue
+                val typeName = child.getClientProperty("typeName") as? String ?: continue
+                refreshDoneStatusHeader(child, typeName)
+            }
+        }
     }
 
     // ── Save ──────────────────────────────────────────────────────────────────
 
     private fun saveConfig() {
-        val doneByType = doneStatusLists.mapValues { (_, list) ->
-            list.selectedValuesList
+        fun activeBadgeNames(badges: List<JLabel>, names: List<String>): List<String> =
+            badges.zip(names).filter { (b, _) -> b.getClientProperty("active") == true }
+                .map { (_, n) -> n }
+
+        val doneByType = doneStatusBadges.mapValues { (_, badges) ->
+            activeBadgeNames(badges, allStatuses)
         }
-        val excludedStatuses = excludedStatusList.selectedValuesList
-        val excludedTypes = excludedTypeList.selectedValuesList
+        val excludedStatuses = activeBadgeNames(excludedStatusBadges, allStatuses)
+        val excludedTypes = activeBadgeNames(excludedTypeBadges, allTypes.map { it.name })
 
         val existing = DevConfig.load()
         DevConfig.save(
@@ -208,7 +369,7 @@ class TicketConfigPanel(
                 )
             )
         )
-        setStatus("  Saved ✓")
+        setStatus("Saved ✓")
         Timer(2500) { setStatus("") }.apply { isRepeats = false; start() }
     }
 
@@ -223,15 +384,13 @@ class TicketConfigPanel(
                 val statuses = JiraMetaService.fetchAndCacheStatuses(cw)
                 SwingUtilities.invokeLater {
                     allStatuses = statuses
-                    rebuildListModels()
+                    rebuildAll()
                     applyConfig(DevConfig.load().ticket)
-                    setStatus(if (statuses.isEmpty()) "No statuses returned — check Jira credentials." else "  Statuses reloaded ✓")
+                    setStatus(if (statuses.isEmpty()) "No statuses returned — check Jira credentials." else "Statuses reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
                     getTicketsPanel()?.reloadMetaBadges()
                 }
-            } else {
-                SwingUtilities.invokeLater { setStatus("No git repo found.") }
-            }
+            } else SwingUtilities.invokeLater { setStatus("No git repo found.") }
         }
     }
 
@@ -244,89 +403,115 @@ class TicketConfigPanel(
                 val types = JiraMetaService.fetchAndCacheTypes(cw)
                 SwingUtilities.invokeLater {
                     allTypes = types
-                    rebuildListModels()
+                    rebuildAll()
                     applyConfig(DevConfig.load().ticket)
-                    setStatus(if (types.isEmpty()) "No types returned — check Jira credentials." else "  Types reloaded ✓")
+                    setStatus(if (types.isEmpty()) "No types returned — check Jira credentials." else "Types reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
                     getTicketsPanel()?.reloadMetaBadges()
                 }
-            } else {
-                SwingUtilities.invokeLater { setStatus("No git repo found.") }
+            } else SwingUtilities.invokeLater { setStatus("No git repo found.") }
+        }
+    }
+
+    // ── Icon loading (reuses TicketsPanel's cache via the panel reference) ────
+
+    /**
+     * Loads a type icon. Delegates to TicketsPanel's cache if available,
+     * otherwise falls back to a direct async load.
+     */
+    private fun loadTypeIcon(
+        typeName: String,
+        iconUrl: String,
+        size: Int,
+        onLoaded: (ImageIcon) -> Unit
+    ) {
+        val tp = getTicketsPanel()
+        if (tp != null) {
+            tp.loadTicketTypeIconAsync(typeName, iconUrl, size, onLoaded)
+        } else {
+            // Fallback: load directly
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val cw = getCwDir()
+                val cacheFile = cw?.let { JiraMetaService.typeIconCacheFile(it, typeName) }
+                var img: ImageIcon? = null
+                if (cacheFile?.exists() == true) {
+                    try {
+                        val raw = javax.imageio.ImageIO.read(cacheFile) ?: throw Exception()
+                        val buf = java.awt.image.BufferedImage(
+                            size,
+                            size,
+                            java.awt.image.BufferedImage.TYPE_INT_ARGB
+                        )
+                        val g = buf.createGraphics()
+                        g.drawImage(
+                            raw.getScaledInstance(size, size, Image.SCALE_SMOOTH),
+                            0,
+                            0,
+                            null
+                        )
+                        g.dispose()
+                        img = ImageIcon(buf)
+                    } catch (_: Exception) {
+                    }
+                }
+                if (img == null && iconUrl.isNotBlank()) {
+                    img = com.khalibre.link2command.devpanel.common.CardUtils.fetchRemoteIcon(
+                        iconUrl,
+                        size,
+                        null,
+                        false
+                    )
+                }
+                img?.let { final -> SwingUtilities.invokeLater { onLoaded(final) } }
             }
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Badge + label helpers ─────────────────────────────────────────────────
 
-    /** Builds a JList that supports multiple selection using checkboxes rendered via custom cell renderer. */
-    private fun buildCheckList(items: List<String>): JList<String> {
-        val model = DefaultListModel<String>().also { m -> items.forEach { m.addElement(it) } }
-        return JList(model).apply {
-            selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
-            cellRenderer = CheckboxListCellRenderer()
-            visibleRowCount = -1
-        }
+    /**
+     * A config-only badge: clicking toggles active state but does NOT trigger
+     * any filter refresh (that happens only on Save).
+     */
+    private fun makeConfigBadge(text: String, initiallyActive: Boolean): JLabel {
+        val label = JLabel(text)
+        label.font = label.font.deriveFont(label.font.size - 2f)
+        label.isOpaque = true
+        label.putClientProperty("active", initiallyActive)
+        label.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        TicketsPanel.applyBadgeStyle(label)
+        label.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                label.putClientProperty("active", label.getClientProperty("active") != true)
+                TicketsPanel.applyBadgeStyle(label); label.repaint()
+                // Note: don't call refresh/save — user clicks Save explicitly
+            }
+
+            override fun mouseEntered(e: MouseEvent) {
+                label.putClientProperty("hovered", true); TicketsPanel.applyBadgeStyle(label)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                label.putClientProperty("hovered", false); TicketsPanel.applyBadgeStyle(label)
+            }
+        })
+        return label
     }
-
-    private fun replaceListModel(list: JList<String>, items: List<String>) {
-        val selected = list.selectedValuesList.toSet()
-        val model = DefaultListModel<String>().also { m -> items.forEach { m.addElement(it) } }
-        list.model = model
-        selectItemsInList(list, selected.toList())
-    }
-
-    private fun selectItemsInList(list: JList<String>, toSelect: List<String>) {
-        if (toSelect.isEmpty()) {
-            list.clearSelection(); return
-        }
-        val model = list.model
-        val indices = (0 until model.size)
-            .filter { model.getElementAt(it) in toSelect }
-            .toIntArray()
-        if (indices.isEmpty()) list.clearSelection()
-        else list.selectedIndices = indices
-    }
-
-    private fun wrapInScrollPane(list: JList<String>, preferredHeight: Int): JScrollPane =
-        JScrollPane(list).apply {
-            border = javax.swing.BorderFactory.createLineBorder(
-                JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1
-            )
-            preferredSize = Dimension(Int.MAX_VALUE, preferredHeight)
-            maximumSize = Dimension(Int.MAX_VALUE, preferredHeight)
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
 
     private fun sectionLabel(text: String) = JBLabel(text).apply {
         font = font.deriveFont(Font.BOLD, font.size - 1f)
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        alignmentX = LEFT_ALIGNMENT
         border = JBUI.Borders.emptyTop(4)
     }
 
     private fun fieldLabel(text: String) = JBLabel(text).apply {
         font = font.deriveFont(font.size - 1f)
-        border = JBUI.Borders.emptyTop(2)
         alignmentX = LEFT_ALIGNMENT
+        border = JBUI.Borders.emptyTop(2)
     }
 
     private fun setStatus(text: String) {
         SwingUtilities.invokeLater { statusLabel.text = text }
-    }
-
-    // ── Checkbox cell renderer ────────────────────────────────────────────────
-
-    private inner class CheckboxListCellRenderer : ListCellRenderer<String> {
-        private val check = JCheckBox().apply { isOpaque = true; border = JBUI.Borders.empty(1, 4) }
-        override fun getListCellRendererComponent(
-            list: JList<out String>, value: String, index: Int,
-            isSelected: Boolean, cellHasFocus: Boolean
-        ): Component {
-            check.text = value
-            check.isSelected = isSelected
-            check.background = if (isSelected) list.selectionBackground else list.background
-            check.foreground = if (isSelected) list.selectionForeground else list.foreground
-            check.font = list.font
-            return check
-        }
     }
 }
