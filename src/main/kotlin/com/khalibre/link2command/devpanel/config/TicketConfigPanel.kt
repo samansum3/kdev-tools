@@ -138,7 +138,8 @@ class TicketConfigPanel(
         setStatus("Loading…")
         ApplicationManager.getApplication().executeOnPooledThread {
             val cw = getCwDir()
-            val statuses = if (cw != null) JiraMetaService.loadStatuses(cw) else emptyList()
+            val statuses =
+                if (cw != null) JiraMetaService.loadStatuses(cw).map { it.name } else emptyList()
             val types = if (cw != null) JiraMetaService.loadTypes(cw) else emptyList()
             SwingUtilities.invokeLater {
                 allStatuses = statuses
@@ -508,7 +509,7 @@ class TicketConfigPanel(
                 JiraMetaService.statusCacheFile(cw).delete()
                 val statuses = JiraMetaService.fetchAndCacheStatuses(cw)
                 SwingUtilities.invokeLater {
-                    allStatuses = statuses
+                    allStatuses = statuses.map { it.name }
                     rebuildAll()
                     applyConfig(DevConfig.load().ticket)
                     setStatus(if (statuses.isEmpty()) "No statuses returned — check Jira credentials." else "Statuses reloaded ✓")

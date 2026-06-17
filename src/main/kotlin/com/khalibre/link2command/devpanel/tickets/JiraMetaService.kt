@@ -10,7 +10,10 @@ import java.net.HttpURLConnection
  * Loads and caches Jira project statuses and issue types.
  *
  * Cache files live under  .git/cw/
- *   jira-statuses.json  — JSON array of status name strings
+ *   jira-statuses.json  — JSON array of { name, colorName } objects (colorName from
+ *                          Jira's statusCategory, e.g. "green", "yellow", "blue-gray",
+ *                          "red", "medium-gray"). Legacy caches (plain string array)
+ *                          are transparently upgraded by re-fetching once.
  *   jira-types.json     — JSON array of { name, iconUrl } objects
  *
  * Cache is permanent once written. Explicit reload (via TicketConfigPanel action buttons)
@@ -19,6 +22,12 @@ import java.net.HttpURLConnection
 object JiraMetaService {
 
     data class IssueTypeInfo(val name: String, val iconUrl: String)
+
+    /**
+     * A Jira workflow status plus its category color, as returned by Jira's
+     * statusCategory.colorName (e.g. "green", "yellow", "blue-gray", "red", "medium-gray").
+     */
+    data class StatusInfo(val name: String, val colorName: String)
 
     private val gson = Gson()
 
@@ -36,11 +45,27 @@ object JiraMetaService {
     // ── Statuses ─────────────────────────────────────────────────────────────
 
     /** Returns cached statuses if available, otherwise fetches from Jira and caches. */
-    fun loadStatuses(cwDir: File): List<String> {
+    fun loadStatuses(cwDir: File): List<StatusInfo> {
         val cache = statusCacheFile(cwDir)
         if (cache.exists()) {
             return try {
-                JsonParser.parseString(cache.readText()).asJsonArray.map { it.asString }
+                val arr = JsonParser.parseString(cache.readText()).asJsonArray
+                if (arr.size() == 0) emptyList()
+                else if (arr[0].isJsonObject) {
+                    // Current format: [{ name, colorName }, ...]
+                    arr.map {
+                        val obj = it.asJsonObject
+                        StatusInfo(
+                            obj.get("name").asString,
+                            obj.get("colorName")?.asString ?: "medium-gray"
+                        )
+                    }
+                } else {
+                    // Legacy format: plain string array with no color info.
+                    // Re-fetch once to upgrade the cache instead of permanently falling back
+                    // to an uncolored default.
+                    fetchAndCacheStatuses(cwDir)
+                }
             } catch (_: Exception) {
                 emptyList()
             }
@@ -49,7 +74,7 @@ object JiraMetaService {
     }
 
     /** Force-fetches from Jira, overwrites cache, returns fresh list. */
-    fun fetchAndCacheStatuses(cwDir: File): List<String> {
+    fun fetchAndCacheStatuses(cwDir: File): List<StatusInfo> {
         return try {
             val cfg = DevConfig.load()
             val baseUrl = cfg.jira.base_url.trimEnd('/')
@@ -60,13 +85,17 @@ object JiraMetaService {
             if (conn.responseCode != 200) return emptyList()
 
             val root = JsonParser.parseString(conn.inputStream.bufferedReader().readText())
-            val names = mutableSetOf<String>()
+            val byName = LinkedHashMap<String, String>() // name → colorName, first-seen wins
             root.asJsonArray.forEach { issueTypeEl ->
                 issueTypeEl.asJsonObject.getAsJsonArray("statuses")?.forEach { statusEl ->
-                    statusEl.asJsonObject.get("name")?.asString?.let { names.add(it) }
+                    val statusObj = statusEl.asJsonObject
+                    val name = statusObj.get("name")?.asString ?: return@forEach
+                    val colorName = statusObj.getAsJsonObject("statusCategory")
+                        ?.get("colorName")?.asString ?: "medium-gray"
+                    byName.putIfAbsent(name, colorName)
                 }
             }
-            val sorted = names.sorted()
+            val sorted = byName.entries.sortedBy { it.key }.map { StatusInfo(it.key, it.value) }
             cwDir.mkdirs()
             statusCacheFile(cwDir).writeText(gson.toJson(sorted))
             sorted

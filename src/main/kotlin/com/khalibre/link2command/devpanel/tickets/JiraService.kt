@@ -10,6 +10,7 @@ data class JiraTicket(
     val key: String,
     val summary: String,
     val status: String,
+    val statusColorName: String? = null,
     val assigneeName: String?,
     val assigneeEmail: String?,
     val issueType: String?,
@@ -249,11 +250,15 @@ object JiraService {
                 val priorityEl = fields.get("priority")
                 val priorityObj =
                     if (priorityEl != null && !priorityEl.isJsonNull) priorityEl.asJsonObject else null
+                val statusObj = fields.getAsJsonObject("status")
+                val statusColorName = statusObj?.getAsJsonObject("statusCategory")
+                    ?.get("colorName")?.asString
 
                 JiraTicket(
                     key = key,
                     summary = fields.get("summary")?.asString ?: "(no summary)",
-                    status = fields.getAsJsonObject("status")?.get("name")?.asString ?: "Unknown",
+                    status = statusObj?.get("name")?.asString ?: "Unknown",
+                    statusColorName = statusColorName,
                     assigneeName = assignee?.get("displayName")?.asString,
                     assigneeEmail = assignee?.get("emailAddress")?.asString,
                     issueType = issueTypeObj?.get("name")?.asString,

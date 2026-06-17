@@ -23,7 +23,7 @@ import javax.swing.SwingUtilities
 object JiraMetaCache {
 
     data class State(
-        val statuses: List<String> = emptyList(),
+        val statuses: List<JiraMetaService.StatusInfo> = emptyList(),
         val types: List<JiraMetaService.IssueTypeInfo> = emptyList(),
         val cwDir: File? = null
     )

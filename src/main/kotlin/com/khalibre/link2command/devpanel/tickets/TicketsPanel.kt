@@ -37,6 +37,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var visibleStatuses: List<String> = emptyList()
     private var visibleTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
 
+    // status name -> Jira statusCategory colorName (e.g. "green", "yellow", "blue-gray"),
+    // populated from JiraMetaCache so ticket card badges can use real status colors
+    // instead of guessing from the status name.
+    private var statusColorByName: Map<String, String> = emptyMap()
+
     // Wrap containers rebuilt on meta load
     private lateinit var statusWrap: JPanel
     private lateinit var notStatusWrap: JPanel
@@ -81,9 +86,13 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // Keep a reference so we can remove it on dispose
     private val metaListener: (JiraMetaCache.State) -> Unit = { state ->
         // Always on EDT (guaranteed by JiraMetaCache)
-        rebuildDynamicBadges(state.statuses, state.types)
+        statusColorByName = state.statuses.associate { it.name to it.colorName }
+        rebuildDynamicBadges(state.statuses.map { it.name }, state.types)
         applyPendingFilterState()
         onFilterBadgeChanged()
+        // Status meta (and thus colors) may load after cards were already rendered with the
+        // fallback color — re-render so badges pick up the real Jira colors once available.
+        if (allLoadedTickets.isNotEmpty()) applySearch()
     }
 
     init {
@@ -547,7 +556,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
-        metaPanel.add(makeStatusBadge(ticket.status))
+        metaPanel.add(makeStatusBadge(ticket.status, ticket.statusColorName))
         metaPanel.add(Box.createHorizontalStrut(6))
 
         ticket.issueType?.let { typeName ->
@@ -607,6 +616,16 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun componentResized(e: java.awt.event.ComponentEvent) = syncCardHeight(card)
         })
 
+        // Sync immediately too: if WrapLayout already reports the correct wrapped height on
+        // this very first layout pass, componentResized never fires (the size doesn't change),
+        // so without this the card would be left hugging its initial (often wrong) bounds.
+        // A couple of deferred passes catch the case where the card isn't fully sized/showing yet.
+        syncCardHeight(card)
+        SwingUtilities.invokeLater {
+            syncCardHeight(card)
+            SwingUtilities.invokeLater { syncCardHeight(card) }
+        }
+
         return card
     }
 
@@ -615,6 +634,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val ph = card.preferredSize.height
         if (card.maximumSize.height != ph) {
             card.maximumSize = Dimension(Int.MAX_VALUE, ph)
+            card.revalidate()
         }
     }
 
@@ -901,27 +921,56 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    private fun makeStatusBadge(status: String): JLabel {
-        val (bg, fg) = when (status) {
-            "In Progress", "Defining AC", "PR Open" ->
-                Pair(Color(230, 241, 251), Color(24, 95, 165))
-
-            "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" ->
-                Pair(Color(234, 243, 222), Color(59, 109, 17))
-
-            "Blocked", "Failed QA" ->
-                Pair(Color(252, 235, 235), Color(163, 45, 45))
-
-            "Submitted for Review", "Pending AC Review" ->
-                Pair(Color(250, 238, 218), Color(133, 79, 11))
-
-            else ->
-                Pair(Color(241, 239, 232), Color(95, 94, 90))
-        }
+    /**
+     * Builds a status badge whose color reflects Jira's own statusCategory.colorName
+     * for that status, rather than guessing from the status name.
+     *
+     * Resolution order:
+     *  1. [statusColorByName] (from JiraMetaCache, keyed by status name) — authoritative
+     *     once project meta has loaded.
+     *  2. [fallbackColorName] — the colorName carried directly on the ticket's own
+     *     status field (from the search response), used before/independently of meta load.
+     *  3. A small set of legacy name-based guesses, kept only as a last-resort fallback
+     *     for the rare case neither of the above is available (e.g. offline/error state).
+     *  4. Neutral gray.
+     */
+    private fun makeStatusBadge(status: String, fallbackColorName: String? = null): JLabel {
+        val colorName = statusColorByName[status] ?: fallbackColorName
+        val (bg, fg) = colorName?.let { jiraStatusColor(it) } ?: legacyGuessColor(status)
         return JLabel(status).apply {
             isOpaque = true; background = bg; foreground = fg
             font = font.deriveFont(font.size - 2f)
             border = JBUI.Borders.empty(2, 6)
         }
+    }
+
+    /** Maps Jira's statusCategory.colorName values to a (background, foreground) badge pair. */
+    private fun jiraStatusColor(colorName: String): Pair<Color, Color> = when (colorName) {
+        "green" -> Pair(Color(234, 243, 222), Color(59, 109, 17))
+        "yellow" -> Pair(Color(250, 238, 218), Color(133, 79, 11))
+        "blue", "blue-gray" -> Pair(Color(230, 241, 251), Color(24, 95, 165))
+        "red", "warm-red" -> Pair(Color(252, 235, 235), Color(163, 45, 45))
+        "brown" -> Pair(Color(243, 234, 224), Color(120, 84, 40))
+        "purple" -> Pair(Color(242, 235, 250), Color(101, 60, 163))
+        "medium-gray", "gray" -> Pair(Color(241, 239, 232), Color(95, 94, 90))
+        else -> Pair(Color(241, 239, 232), Color(95, 94, 90))
+    }
+
+    /** Last-resort fallback when no Jira-provided color is available at all. */
+    private fun legacyGuessColor(status: String): Pair<Color, Color> = when (status) {
+        "In Progress", "Defining AC", "PR Open" ->
+            Pair(Color(230, 241, 251), Color(24, 95, 165))
+
+        "Done", "Closed", "Resolved", "Merged", "Deployed to UAT", "Pending QA" ->
+            Pair(Color(234, 243, 222), Color(59, 109, 17))
+
+        "Blocked", "Failed QA" ->
+            Pair(Color(252, 235, 235), Color(163, 45, 45))
+
+        "Submitted for Review", "Pending AC Review" ->
+            Pair(Color(250, 238, 218), Color(133, 79, 11))
+
+        else ->
+            Pair(Color(241, 239, 232), Color(95, 94, 90))
     }
 }

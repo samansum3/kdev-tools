@@ -470,9 +470,12 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         gbc.gridy = 3; card.add(actionPanel, gbc)
 
         // Sync card max-height whenever actionPanel reflows (wrapping changes height)
-        val syncHeight: (java.awt.event.ComponentEvent) -> Unit = {
+        val syncHeight: (java.awt.event.ComponentEvent?) -> Unit = {
             val ph = card.preferredSize.height
-            if (card.maximumSize.height != ph) card.maximumSize = Dimension(Int.MAX_VALUE, ph)
+            if (card.maximumSize.height != ph) {
+                card.maximumSize = Dimension(Int.MAX_VALUE, ph)
+                card.revalidate()
+            }
         }
         actionPanel.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = syncHeight(e)
@@ -480,6 +483,16 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         card.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = syncHeight(e)
         })
+
+        // Sync immediately too: if WrapLayout already reports the correct wrapped height on
+        // this very first layout pass, componentResized never fires (the size doesn't change),
+        // so without this the card would be left hugging its initial (often wrong) bounds.
+        // A couple of deferred passes catch the case where the card isn't fully sized/showing yet.
+        syncHeight(null)
+        SwingUtilities.invokeLater {
+            syncHeight(null)
+            SwingUtilities.invokeLater { syncHeight(null) }
+        }
         return card
     }
 
