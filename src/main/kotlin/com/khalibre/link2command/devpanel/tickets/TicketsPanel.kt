@@ -30,6 +30,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // Dynamic badges — rebuilt when meta is loaded
     private var statusBadges: List<JLabel> = emptyList()
+    private var notStatusBadges: List<JLabel> = emptyList()
     private var typeBadges: List<JLabel> = emptyList()
     private var notTypeBadges: List<JLabel> = emptyList()
     private var visibleStatuses: List<String> = emptyList()
@@ -37,6 +38,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // Wrap containers rebuilt on meta load
     private lateinit var statusWrap: JPanel
+    private lateinit var notStatusWrap: JPanel
     private lateinit var typeWrap: JPanel
     private lateinit var notTypeWrap: JPanel
     private lateinit var filtersBody: JPanel
@@ -116,6 +118,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         allStatuses: List<String>,
         allTypes: List<JiraMetaService.IssueTypeInfo>
     ) {
+        // Always re-read config so excluded lists reflect latest saved Ticket Config
         val cfg = com.khalibre.link2command.devpanel.config.DevConfig.load().ticket
         val excludedStatuses = cfg.excludedStatuses.toSet()
         val excludedTypes = cfg.excludedTypes.toSet()
@@ -124,12 +127,16 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         visibleTypeInfos = allTypes.filter { it.name !in excludedTypes }
 
         statusBadges = visibleStatuses.map { name -> makeBadge(name, false) }
+        notStatusBadges = visibleStatuses.map { name -> makeBadge(name, false) }
         typeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
         notTypeBadges = visibleTypeInfos.map { info -> makeTypeBadge(info) }
 
         statusWrap.removeAll()
         statusBadges.forEach { statusWrap.add(it) }
         statusWrap.add(badgeHideDone)
+
+        notStatusWrap.removeAll()
+        notStatusBadges.forEach { notStatusWrap.add(it) }
 
         typeWrap.removeAll()
         typeBadges.forEach { typeWrap.add(it) }
@@ -138,6 +145,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         notTypeBadges.forEach { notTypeWrap.add(it) }
 
         statusWrap.revalidate(); statusWrap.repaint()
+        notStatusWrap.revalidate(); notStatusWrap.repaint()
         typeWrap.revalidate(); typeWrap.repaint()
         notTypeWrap.revalidate(); notTypeWrap.repaint()
         filtersBody.revalidate(); filtersBody.repaint()
@@ -198,6 +206,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         restore(badgeUnassigned, "unassigned")
         restore(badgeHideDone, "hideDone")
         statusBadges.zip(visibleStatuses).forEach { (b, n) -> restore(b, "status_$n") }
+        notStatusBadges.zip(visibleStatuses).forEach { (b, n) -> restore(b, "notStatus_$n") }
         typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "type_${i.name}") }
         notTypeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "notType_${i.name}") }
     }
@@ -222,6 +231,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             "hideDone" to active(badgeHideDone)
         )
         statusBadges.zip(visibleStatuses).forEach { (b, n) -> map["status_$n"] = active(b) }
+        notStatusBadges.zip(visibleStatuses).forEach { (b, n) -> map["notStatus_$n"] = active(b) }
         typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> map["type_${i.name}"] = active(b) }
         notTypeBadges.zip(visibleTypeInfos)
             .forEach { (b, i) -> map["notType_${i.name}"] = active(b) }
@@ -272,6 +282,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         // Badge wrap panels (empty until meta loaded)
         statusWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+        notStatusWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
         typeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
         notTypeWrap = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
 
@@ -342,6 +353,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         filtersBody.add(Box.createVerticalStrut(4))
         filtersBody.add(filterSection("status", emptyList(), prebuiltWrap = statusWrap))
         filtersBody.add(Box.createVerticalStrut(4))
+        filtersBody.add(filterSection("not status", emptyList(), prebuiltWrap = notStatusWrap))
+        filtersBody.add(Box.createVerticalStrut(4))
         filtersBody.add(filterSection("type", emptyList(), prebuiltWrap = typeWrap))
         filtersBody.add(Box.createVerticalStrut(4))
         filtersBody.add(filterSection("not type", emptyList(), prebuiltWrap = notTypeWrap))
@@ -382,7 +395,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             badgeMyTasks,
             badgeUnassigned,
             badgeHideDone
-        ) + statusBadges + typeBadges + notTypeBadges
+        ) + statusBadges + notStatusBadges + typeBadges + notTypeBadges
 
     fun onFilterBadgeChanged() {
         filterToggleLabel.text = filterHeaderText()
@@ -477,6 +490,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val activeStatuses = statusBadges.zip(visibleStatuses)
             .filter { (b, _) -> b.getClientProperty("active") == true }
             .map { (_, n) -> n }.toSet()
+        val activeNotStatuses = notStatusBadges.zip(visibleStatuses)
+            .filter { (b, _) -> b.getClientProperty("active") == true }
+            .map { (_, n) -> n }.toSet()
         val activeTypes = typeBadges.zip(visibleTypeInfos)
             .filter { (b, _) -> b.getClientProperty("active") == true }
             .map { (_, i) -> i.name }.toSet()
@@ -491,6 +507,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             myTasks = active(badgeMyTasks),
             unassigned = active(badgeUnassigned),
             activeStatuses = activeStatuses,
+            notStatusFilter = activeNotStatuses,
             hideDone = active(badgeHideDone),
             typeFilter = activeTypes,
             notTypeFilter = activeNotTypes

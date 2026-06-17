@@ -26,6 +26,8 @@ data class TicketFilters(
     val unassigned: Boolean = false,
     // Active status badges — each maps directly to a Jira status name
     val activeStatuses: Set<String> = emptySet(),
+    // not-status badges — each maps directly to a Jira status name excluded via NOT IN
+    val notStatusFilter: Set<String> = emptySet(),
     // hide-done modifier (only applied when no explicit status badges are active)
     val hideDone: Boolean = false,
     val typeFilter: Set<String> = emptySet(),
@@ -57,6 +59,10 @@ object JiraService {
 
             filters.hideDone -> clauses += buildHideDoneClause()
         }
+
+        // Not-status filter (always applied, independent of status/hideDone)
+        if (filters.notStatusFilter.isNotEmpty())
+            clauses += "status NOT IN (${filters.notStatusFilter.joinToString(",") { "\"$it\"" }})"
 
         // Type filters
         if (filters.typeFilter.isNotEmpty())

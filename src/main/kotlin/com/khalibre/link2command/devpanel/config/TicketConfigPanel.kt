@@ -56,6 +56,10 @@ class TicketConfigPanel(
     private val excludedTypeWrap =
         JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
 
+    // Header rows for the two collapsed excluded sections (stored so we can refresh their count labels)
+    private lateinit var excludedStatusHeader: JPanel
+    private lateinit var excludedTypeHeader: JPanel
+
     private val statusLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
@@ -78,15 +82,23 @@ class TicketConfigPanel(
         form.add(Box.createVerticalStrut(12))
 
         // ── Excluded statuses ────────────────────────────────────────────────
-        form.add(fieldLabel("Excluded statuses  (hidden from Status filter badges)"))
-        form.add(Box.createVerticalStrut(4))
-        form.add(excludedStatusWrap.also { it.alignmentX = LEFT_ALIGNMENT })
+        form.add(
+            buildCollapsibleExcludedSection(
+            label = "Excluded statuses",
+            hint = "hidden from Status filter badges",
+            wrapPanel = excludedStatusWrap,
+            getBadges = { excludedStatusBadges }
+        ).also { excludedStatusHeader = it })
         form.add(Box.createVerticalStrut(12))
 
         // ── Excluded types ───────────────────────────────────────────────────
-        form.add(fieldLabel("Excluded types  (hidden from type / not-type filter badges)"))
-        form.add(Box.createVerticalStrut(4))
-        form.add(excludedTypeWrap.also { it.alignmentX = LEFT_ALIGNMENT })
+        form.add(
+            buildCollapsibleExcludedSection(
+            label = "Excluded types",
+            hint = "hidden from type / not-type filter badges",
+            wrapPanel = excludedTypeWrap,
+            getBadges = { excludedTypeBadges }
+        ).also { excludedTypeHeader = it })
         form.add(Box.createVerticalStrut(20))
 
         // ── ACTIONS ──────────────────────────────────────────────────────────
@@ -286,10 +298,111 @@ class TicketConfigPanel(
         return "$typeName done statuses$count  $caret"
     }
 
+    // ── Excluded collapsible sections ─────────────────────────────────────────
+
+    /**
+     * Returns a container holding a collapsible header + badge wrap.
+     * The header shows:  "<Label>  (N)  ▸/▾"  and clicking toggles the wrap.
+     * Collapsed by default.
+     */
+    private fun buildCollapsibleExcludedSection(
+        label: String,
+        hint: String,
+        wrapPanel: JPanel,
+        getBadges: () -> List<JLabel>
+    ): JPanel {
+        var expanded = false
+        wrapPanel.isVisible = false
+        wrapPanel.alignmentX = LEFT_ALIGNMENT
+
+        fun headerText(): String {
+            val count = getBadges().count { it.getClientProperty("active") == true }
+            val cnt = if (count > 0) "  ($count)" else ""
+            val caret = if (expanded) "▾" else "▸"
+            return "$label$cnt  $caret"
+        }
+
+        val textLabel = JLabel(headerText()).apply {
+            font = font.deriveFont(font.size - 1f)
+            foreground = JBUI.CurrentTheme.Label.foreground()
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = hint
+        }
+
+        val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, 24)
+            add(textLabel)
+        }
+
+        val clickHandler = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                expanded = !expanded
+                wrapPanel.isVisible = expanded
+                textLabel.text = headerText()
+                wrapPanel.revalidate(); wrapPanel.repaint()
+                headerRow.parent?.revalidate(); headerRow.parent?.repaint()
+            }
+
+            override fun mouseEntered(e: MouseEvent) {
+                textLabel.foreground = Color(24, 95, 165)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                textLabel.foreground = JBUI.CurrentTheme.Label.foreground()
+            }
+        }
+        headerRow.addMouseListener(clickHandler)
+        textLabel.addMouseListener(clickHandler)
+
+        // Tag the row so refreshExcludedHeader can update the text
+        headerRow.putClientProperty("textLabel", textLabel)
+        headerRow.putClientProperty("expanded", { expanded })
+        headerRow.putClientProperty("getBadges", getBadges)
+        headerRow.putClientProperty("labelText", label)
+
+        val container = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            add(headerRow)
+            add(wrapPanel)
+        }
+        return container
+    }
+
+    /** Refreshes the count text in an excluded-section header row. */
+    private fun refreshExcludedHeader(section: JPanel) {
+        val inner = (0 until section.componentCount)
+            .mapNotNull { section.getComponent(it) as? JPanel }
+            .firstOrNull { it.getClientProperty("textLabel") != null } ?: return
+        val textLabel = inner.getClientProperty("textLabel") as? JLabel ?: return
+
+        @Suppress("UNCHECKED_CAST")
+        val getBadges = inner.getClientProperty("getBadges") as? () -> List<JLabel> ?: return
+
+        @Suppress("UNCHECKED_CAST")
+        val isExpanded = (inner.getClientProperty("expanded") as? () -> Boolean)?.invoke() ?: false
+        val labelText = inner.getClientProperty("labelText") as? String ?: ""
+        val count = getBadges().count { it.getClientProperty("active") == true }
+        val cnt = if (count > 0) "  ($count)" else ""
+        val caret = if (isExpanded) "▾" else "▸"
+        textLabel.text = "$labelText$cnt  $caret"
+    }
+
     // ── Excluded badge sections ───────────────────────────────────────────────
 
     private fun rebuildExcludedBadges() {
-        excludedStatusBadges = allStatuses.map { makeConfigBadge(it, false) }
+        excludedStatusBadges = allStatuses.map { status ->
+            makeConfigBadge(status, false).also { badge ->
+                badge.addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        SwingUtilities.invokeLater { refreshExcludedHeader(excludedStatusHeader) }
+                    }
+                })
+            }
+        }
         excludedStatusWrap.removeAll()
         excludedStatusBadges.forEach { excludedStatusWrap.add(it) }
         excludedStatusWrap.revalidate(); excludedStatusWrap.repaint()
@@ -297,10 +410,14 @@ class TicketConfigPanel(
         excludedTypeBadges = allTypes.map { info ->
             makeConfigBadge(info.name, false).also { badge ->
                 loadTypeIcon(info.name, info.iconUrl, 12) { icon ->
-                    badge.icon = icon
-                    badge.iconTextGap = 3
+                    badge.icon = icon; badge.iconTextGap = 3
                     badge.revalidate(); badge.repaint()
                 }
+                badge.addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        SwingUtilities.invokeLater { refreshExcludedHeader(excludedTypeHeader) }
+                    }
+                })
             }
         }
         excludedTypeWrap.removeAll()
@@ -333,6 +450,9 @@ class TicketConfigPanel(
         }
         // Refresh all done-status header labels to show correct counts
         refreshAllDoneHeaders()
+        // Refresh excluded section header counts
+        if (::excludedStatusHeader.isInitialized) refreshExcludedHeader(excludedStatusHeader)
+        if (::excludedTypeHeader.isInitialized) refreshExcludedHeader(excludedTypeHeader)
     }
 
     private fun refreshAllDoneHeaders() {
