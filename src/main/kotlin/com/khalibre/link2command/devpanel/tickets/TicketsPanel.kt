@@ -928,16 +928,21 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         panel: JPanel, ticket: JiraTicket, isMe: Boolean, transitions: List<Pair<String, String>>
     ) {
         transitions.forEach { (targetStatus, transitionName) ->
+            val (bg, fg) = resolveStatusColors(targetStatus)
             val btn = if (targetStatus == "In Progress")
                 CardUtils.makeTransitionButton(
                     targetStatus,
-                    transitionName
+                    transitionName,
+                    bg,
+                    fg
                 ) { doTransitionInProgress(ticket.key) }
             else
-                CardUtils.makeTransitionButton(
-                    targetStatus,
-                    transitionName
-                ) { doTransition(ticket.key, targetStatus) }
+                CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
+                    doTransition(
+                        ticket.key,
+                        targetStatus
+                    )
+                }
             panel.add(btn)
         }
     }
@@ -1189,6 +1194,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             border = JBUI.Borders.empty(2, 6)
         }
     }
+
+    private fun resolveStatusColors(status: String): Pair<Color, Color> =
+        statusColorByName[status]?.let { jiraStatusColor(it) } ?: legacyGuessColor(status)
 
     /** Maps Jira's statusCategory.colorName values to a (background, foreground) badge pair. */
     private fun jiraStatusColor(colorName: String): Pair<Color, Color> = when (colorName) {

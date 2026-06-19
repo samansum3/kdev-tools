@@ -15,13 +15,17 @@ import javax.swing.JPanel
 import javax.swing.border.CompoundBorder
 
 object CardUtils {
+    private val BUTTON_H_PADDING = JBUI.scale(4)      // right-side / text padding
+    private val ARROW_LEFT_PADDING =
+        JBUI.scale(8)     // left edge -> arrow, bit more breathing room
+    private val ARROW_BADGE_GAP = JBUI.scale(4)        // arrow -> badge
 
     fun makeActionButton(text: String, action: () -> Unit): JButton {
         return JButton(text).apply {
             font = font.deriveFont(font.size - 1f)
             isFocusPainted = false
             isContentAreaFilled = false
-            margin = JBUI.insets(2, 6)
+            margin = JBUI.insets(2, BUTTON_H_PADDING)
             addActionListener { action() }
             addMouseListener(object : MouseAdapter() {
                 override fun mouseEntered(e: MouseEvent) {
@@ -38,11 +42,71 @@ object CardUtils {
     fun makeTransitionButton(
         targetStatus: String,
         tooltip: String? = null,
+        bg: Color = Color(241, 239, 232),
+        fg: Color = Color(95, 94, 90),
+        arrowFg: Color = Color(120, 120, 120),
         action: () -> Unit
-    ): JButton =
-        makeActionButton("→ $targetStatus", action).also {
-            if (tooltip != null) it.toolTipText = tooltip
+    ): JButton {
+        // Derive the font up front so we can measure the arrow with the *real* font,
+        // before the button even exists.
+        val baseFont = JBUI.Fonts.label().deriveFont(JBUI.Fonts.label().size - 1f)
+        val arrowWidth = Toolkit.getDefaultToolkit()
+            .getFontMetrics(baseFont).stringWidth("→") // rough pre-measure; refined below
+
+        val btn = object : JButton(targetStatus) {
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                g2.setRenderingHint(
+                    RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON
+                )
+
+                val in_ = insets
+                g2.color = when {
+                    model.isPressed -> bg.darker().darker()
+                    model.isRollover -> bg.darker()
+                    else -> bg
+                }
+                val arcRadius = 4 // tweak to taste — try 6-10 for a subtle pill-ish look
+
+                g2.fillRoundRect(
+                    in_.left + arrowWidth + 10,
+                    7,
+                    width - in_.left - in_.right - arrowWidth - 15,
+                    height - 14,
+                    arcRadius,
+                    arcRadius
+                )
+
+                g2.color = arrowFg
+                g2.font = font
+                val fm = g2.fontMetrics
+                val arrowY = (height + fm.ascent - fm.descent) / 2
+                g2.drawString("→", ARROW_LEFT_PADDING, arrowY)
+
+                g2.dispose()
+                super.paintComponent(g)
+            }
         }
+
+        btn.font = baseFont
+        btn.foreground = fg
+        btn.isOpaque = false
+        btn.isContentAreaFilled = false
+        btn.isFocusPainted = false
+        btn.isRolloverEnabled = true
+
+        // Reserve left space for [padding][arrow][gap], right side just normal padding.
+        val fm = btn.getFontMetrics(btn.font)
+        val leftSpace = ARROW_LEFT_PADDING + fm.stringWidth("→") + ARROW_BADGE_GAP
+        btn.margin = JBUI.insets(2, leftSpace, 2, BUTTON_H_PADDING + 4)
+        val pref = btn.preferredSize
+        btn.preferredSize = Dimension(pref.width + 4, pref.height)
+
+        if (tooltip != null) btn.toolTipText = tooltip
+        btn.addActionListener { action() }
+        return btn
+    }
 
     // Per-group selection state — key is a group tag (e.g. "tickets", "pr"), value is the selected card key
     private val selectedCards = mutableMapOf<String, JPanel?>()
