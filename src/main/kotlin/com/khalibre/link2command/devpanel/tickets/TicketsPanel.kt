@@ -59,6 +59,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private var allLoadedTickets: List<JiraTicket> = emptyList()
+    private var currentJql: String = ""
     private var filtersExpanded = true
     private val cardsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
     private val statusLabel = JBLabel("").apply {
@@ -67,6 +68,11 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private var currentUserEmail: String? = null
+
+    // Assignable users for the assignee dropdown (per-project), loaded once from cache/Jira.
+    // "Unassigned" is represented as a null JiraUserService.JiraUser in the combo model.
+    private var assignableUsers: List<JiraUserService.JiraUser> = emptyList()
+    private val assigneeAvatarCache = mutableMapOf<String, ImageIcon?>()  // accountId → avatar
 
     // Icon memory caches
     // typeName → list of pending callbacks (supports multiple badges per type)
@@ -103,6 +109,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         // Trigger initial load — if already cached, callback fires immediately
         val cw = cwDir()
         if (cw != null) JiraMetaCache.load(cw)
+        loadAssignableUsers()
     }
 
     override fun removeNotify() {
@@ -123,6 +130,19 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
+
+    private fun loadAssignableUsers() {
+        val cw = cwDir() ?: return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val users = JiraUserService.loadUsers(cw)
+            SwingUtilities.invokeLater {
+                assignableUsers = users
+                // Re-render so any already-built assignee dropdowns get populated with
+                // the full user list instead of just their own ticket's current assignee.
+                if (allLoadedTickets.isNotEmpty()) applySearch()
+            }
+        }
+    }
 
     // ── Dynamic badges ────────────────────────────────────────────────────────
 
@@ -443,6 +463,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 val tickets = JiraService.searchTickets(jql)
                 SwingUtilities.invokeLater {
                     if (requestGeneration.get() != myGeneration) return@invokeLater
+                    currentJql = jql
                     allLoadedTickets = tickets
                     applySearch(); setStatus("")
                 }
@@ -587,16 +608,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             metaPanel.add(sepLabel())
         }
 
-        val assigneeText = when {
-            ticket.assigneeName == null -> "unassigned"
-            isMe -> "● ${ticket.assigneeName}"
-            else -> ticket.assigneeName
-        }
-        metaPanel.add(JBLabel(assigneeText).apply {
-            font = font.deriveFont(font.size - 2f)
-            foreground =
-                if (isMe) Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
-        })
+        metaPanel.add(buildAssigneeCombo(ticket))
         gbc.gridy = 1; card.add(metaPanel, gbc)
 
         // Row 2: action buttons — WrapLayout so they wrap when panel is narrow
@@ -636,6 +648,154 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             card.maximumSize = Dimension(Int.MAX_VALUE, ph)
             card.revalidate()
         }
+    }
+
+    // ── Assignee dropdown ─────────────────────────────────────────────────────
+
+    /**
+     * Builds the per-card assignee dropdown: same avatar+name style as PR Tools > author,
+     * but borderless (no label) and inline in the card's meta row.
+     * "Unassigned" is always the first item. Selecting a different user updates the
+     * ticket's assignee in Jira, then refreshes just that one ticket's data.
+     */
+    private fun buildAssigneeCombo(ticket: JiraTicket): JComboBox<JiraUserService.JiraUser?> {
+        val combo = com.intellij.openapi.ui.ComboBox<JiraUserService.JiraUser?>()
+        combo.isEditable = false
+        combo.isOpaque = false
+        combo.font = combo.font.deriveFont(combo.font.size - 2f)
+        // IntelliJ's ComboBox UI delegate (Darcula et al.) honors this client property to
+        // paint without the usual box/border chrome, reading as plain text+avatar — the
+        // only reliable way to make a JComboBox borderless under the platform look and feel.
+        combo.putClientProperty("JComboBox.isBorderless", true)
+
+        val unassignedOption: JiraUserService.JiraUser? = null
+        val currentUser = assignableUsers.firstOrNull { it.accountId == ticket.assigneeAccountId }
+        val model = DefaultComboBoxModel<JiraUserService.JiraUser?>()
+        model.addElement(unassignedOption)
+        assignableUsers.forEach { model.addElement(it) }
+
+        // If the ticket's current assignee isn't in the assignable-users list yet (e.g. cache
+        // hasn't loaded, or the assignee lost project access), still show them as the selection
+        // by adding a synthetic entry built from the ticket's own fields.
+        val selectedUser = currentUser ?: ticket.assigneeAccountId?.let { accountId ->
+            JiraUserService.JiraUser(
+                accountId,
+                ticket.assigneeName ?: accountId,
+                ticket.assigneeEmail,
+                null
+            )
+                .also { model.addElement(it) }
+        }
+        combo.model = model
+        combo.selectedItem = selectedUser
+
+        combo.renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean
+            ): Component {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                val user = value as? JiraUserService.JiraUser
+                border = JBUI.Borders.empty(4, 6)
+                if (user == null) {
+                    text = "Unassigned"
+                    icon = null
+                    foreground =
+                        if (isSelected) foreground else JBUI.CurrentTheme.Label.disabledForeground()
+                    return this
+                }
+                text = user.displayName
+                foreground = if (isSelected) foreground
+                else if (user.accountId == currentUserAccountId())
+                    Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
+                icon = resolveAssigneeAvatar(user)
+                iconTextGap = 5
+                return this
+            }
+        }
+
+        combo.addActionListener {
+            val selected = combo.selectedItem as? JiraUserService.JiraUser
+            if (selected?.accountId == ticket.assigneeAccountId) return@addActionListener
+            if (selected == null && ticket.assigneeAccountId == null) return@addActionListener
+            onAssigneeChanged(ticket, selected)
+        }
+
+        return combo
+    }
+
+    private fun currentUserAccountId(): String? =
+        assignableUsers.firstOrNull { it.emailAddress == currentUserEmail }?.accountId
+
+    private fun onAssigneeChanged(ticket: JiraTicket, newAssignee: JiraUserService.JiraUser?) {
+        setStatus("${ticket.key}: updating assignee…")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = JiraUserService.updateAssignee(ticket.key, newAssignee?.accountId)
+            if (result.isFailure) {
+                SwingUtilities.invokeLater {
+                    setStatus("✗ ${ticket.key}: ${result.exceptionOrNull()?.message?.take(80)}")
+                }
+                return@executeOnPooledThread
+            }
+            // Per the "load new data but not the whole list" requirement: re-fetch just this
+            // one ticket (scoped via "AND key = <key>" against the active filter JQL) instead
+            // of reloading everything.
+            val refreshed = try {
+                JiraService.refreshTicket(currentJql, ticket.key)
+            } catch (_: Exception) {
+                null
+            }
+            SwingUtilities.invokeLater {
+                if (refreshed != null) {
+                    // Ticket still matches current filters — replace it in place.
+                    allLoadedTickets =
+                        allLoadedTickets.map { if (it.key == ticket.key) refreshed else it }
+                } else {
+                    // No longer matches current filters (e.g. an "Unassigned"/"My Tasks" filter
+                    // is active and the new assignee no longer satisfies it) — remove it,
+                    // leaving every other ticket untouched.
+                    allLoadedTickets = allLoadedTickets.filter { it.key != ticket.key }
+                }
+                applySearch()
+                setStatus("✓ ${ticket.key}: assignee updated")
+            }
+        }
+    }
+
+    /** Avatar loader for assignee combos: memory cache → disk cache (.git/cw/icons) → Jira fetch. */
+    private fun resolveAssigneeAvatar(user: JiraUserService.JiraUser): ImageIcon? {
+        assigneeAvatarCache[user.accountId]?.let { return it }
+        if (assigneeAvatarCache.containsKey(user.accountId)) return null // load already in flight / failed
+        assigneeAvatarCache[user.accountId] = null
+        val url = user.avatarUrl ?: return null
+        val cw = cwDir()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            var img: ImageIcon? = null
+            if (cw != null) {
+                val cacheFile = JiraUserService.userAvatarCacheFile(cw, user.accountId)
+                if (cacheFile.exists()) img = loadAndScaleFile(cacheFile, 16)
+            }
+            if (img == null) {
+                img = CardUtils.fetchRemoteIcon(url, 16, project.basePath?.let { File(it) }, false)
+                if (img != null && cw != null) {
+                    try {
+                        val cacheFile = JiraUserService.userAvatarCacheFile(cw, user.accountId)
+                        cacheFile.parentFile.mkdirs()
+                        val raw = ImageIO.read(java.net.URL(url))
+                        if (raw != null) ImageIO.write(raw, "png", cacheFile)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            if (img != null) {
+                assigneeAvatarCache[user.accountId] = img
+                SwingUtilities.invokeLater { cardsPanel.repaint() }
+            }
+        }
+        return null
     }
 
     private fun sepLabel() = JBLabel("  ·  ").apply {

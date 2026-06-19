@@ -4,6 +4,7 @@ import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
 import com.khalibre.link2command.devpanel.config.DevConfig
 import com.khalibre.link2command.devpanel.pr.PrService
+import com.khalibre.link2command.devpanel.tickets.JiraService.buildJql
 import java.io.File
 
 data class JiraTicket(
@@ -13,6 +14,7 @@ data class JiraTicket(
     val statusColorName: String? = null,
     val assigneeName: String?,
     val assigneeEmail: String?,
+    val assigneeAccountId: String? = null,
     val issueType: String?,
     val issueTypeIconUrl: String?,
     val priority: String?,
@@ -114,6 +116,45 @@ object JiraService {
             )
         File("/tmp/result.json").writeText(result.stdout) // Debug output
         return parseAcliResponse(result.stdout)
+    }
+
+    /**
+     * Re-fetches a single ticket using the current filter JQL (so the result still respects
+     * the same scoping/visibility rules), narrowed to that one ticket via "AND key = <key>".
+     *
+     * Used after an assignee change: rather than reloading the entire ticket list, we only
+     * need to know whether this one ticket should still be visible under the active filters,
+     * and if so, fetch its fresh fields.
+     *
+     * Returns the updated [JiraTicket], or null if the ticket no longer matches the current
+     * filters (e.g. an "Unassigned" filter was active and the ticket now has an assignee).
+     */
+    fun refreshTicket(currentJql: String, ticketKey: String): JiraTicket? {
+        val scopedJql = scopeJqlToKey(currentJql, ticketKey)
+        val result = PrService.runCmd(
+            listOf(
+                "acli", "jira", "workitem", "search",
+                "--jql", scopedJql,
+                "--fields", "summary,status,assignee,issuetype,priority",
+                "--json", "--limit", "1"
+            )
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank()) return null
+        return parseAcliResponse(result.stdout).firstOrNull()
+    }
+
+    /**
+     * Inserts "key = <ticketKey>" as an AND-ed clause ahead of any ORDER BY clause in [jql].
+     * [jql] is expected in the shape produced by [buildJql]: "<clauses> ORDER BY created ASC"
+     * or just "ORDER BY created ASC" when there are no clauses.
+     */
+    private fun scopeJqlToKey(jql: String, ticketKey: String): String {
+        val orderByIdx = jql.indexOf("ORDER BY")
+        val clauses = if (orderByIdx >= 0) jql.substring(0, orderByIdx).trim() else jql.trim()
+        val orderBy = if (orderByIdx >= 0) jql.substring(orderByIdx) else "ORDER BY created ASC"
+        val keyClause = "key = \"$ticketKey\""
+        val combined = if (clauses.isBlank()) keyClause else "($clauses) AND $keyClause"
+        return "$combined $orderBy"
     }
 
     /**
@@ -261,6 +302,7 @@ object JiraService {
                     statusColorName = statusColorName,
                     assigneeName = assignee?.get("displayName")?.asString,
                     assigneeEmail = assignee?.get("emailAddress")?.asString,
+                    assigneeAccountId = assignee?.get("accountId")?.asString,
                     issueType = issueTypeObj?.get("name")?.asString,
                     issueTypeIconUrl = fixIconUrl(baseUrl, issueTypeObj?.get("iconUrl")?.asString),
                     priority = priorityObj?.get("name")?.asString,
