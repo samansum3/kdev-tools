@@ -12,6 +12,7 @@ import com.khalibre.link2command.devpanel.config.DevConfig
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import javax.imageio.ImageIO
@@ -659,25 +660,78 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
      * ticket's assignee in Jira, then refreshes just that one ticket's data.
      */
     private fun buildAssigneeCombo(ticket: JiraTicket): JComboBox<JiraUserService.JiraUser?> {
-        val combo = com.intellij.openapi.ui.ComboBox<JiraUserService.JiraUser?>()
+        val hoverBg = JBUI.CurrentTheme.ActionButton.hoverBackground()
+
+        val combo = object : com.intellij.openapi.ui.ComboBox<JiraUserService.JiraUser?>() {
+            var isHovered = false
+
+            override fun getInsets(): Insets {
+                val hasAvatar = selectedItem is JiraUserService.JiraUser
+                return if (hasAvatar) Insets(0, 0, 0, 0) else Insets(1, 4, 1, 0)
+            }
+
+            override fun getInsets(insets: Insets): Insets {
+                val i = getInsets()
+                insets.set(i.top, i.left, i.bottom, i.right)
+                return insets
+            }
+
+            override fun getPreferredSize(): Dimension {
+                @Suppress("UNCHECKED_CAST")
+                val r = renderer as? ListCellRenderer<Any?> ?: return super.getPreferredSize()
+                val rendererComp =
+                    r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
+                val content = rendererComp.preferredSize
+                return Dimension(content.width + ARROW_GUTTER, content.height)
+            }
+
+            override fun paintComponent(g: Graphics) {
+                if (isHovered) {
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(
+                        RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON
+                    )
+                    g2.color = hoverBg
+                    val w = width.toDouble();
+                    val h = height.toDouble()
+                    val r = JBUI.scale(4).toDouble()
+                    g2.fill(java.awt.geom.RoundRectangle2D.Double(0.0, 0.0, w, h, r, r))
+                    g2.dispose()
+                }
+                super.paintComponent(g)
+            }
+        }
         combo.isEditable = false
         combo.isOpaque = false
+        combo.background =
+            Color(0, 0, 0, 0) // always transparent — UI delegate's own fill is a no-op now
+        combo.border = JBUI.Borders.empty()
         combo.font = combo.font.deriveFont(combo.font.size - 2f)
-        // IntelliJ's ComboBox UI delegate (Darcula et al.) honors this client property to
-        // paint without the usual box/border chrome, reading as plain text+avatar — the
-        // only reliable way to make a JComboBox borderless under the platform look and feel.
         combo.putClientProperty("JComboBox.isBorderless", true)
+        combo.addMouseListener(object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                combo.isHovered = true; combo.repaint()
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                combo.isHovered = false; combo.repaint()
+            }
+        })
 
         val unassignedOption: JiraUserService.JiraUser? = null
-        val currentUser = assignableUsers.firstOrNull { it.accountId == ticket.assigneeAccountId }
+        val ticketAssignee =
+            assignableUsers.firstOrNull { it.accountId == ticket.assigneeAccountId }
+
+        val loggedInAccountId = currentUserAccountId()
+        val (loggedInFirst, rest) = assignableUsers.partition { it.accountId == loggedInAccountId }
+        val orderedUsers = loggedInFirst + rest
+
         val model = DefaultComboBoxModel<JiraUserService.JiraUser?>()
         model.addElement(unassignedOption)
-        assignableUsers.forEach { model.addElement(it) }
+        orderedUsers.forEach { model.addElement(it) }
 
-        // If the ticket's current assignee isn't in the assignable-users list yet (e.g. cache
-        // hasn't loaded, or the assignee lost project access), still show them as the selection
-        // by adding a synthetic entry built from the ticket's own fields.
-        val selectedUser = currentUser ?: ticket.assigneeAccountId?.let { accountId ->
+        val selectedUser = ticketAssignee ?: ticket.assigneeAccountId?.let { accountId ->
             JiraUserService.JiraUser(
                 accountId,
                 ticket.assigneeName ?: accountId,
@@ -698,8 +752,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 cellHasFocus: Boolean
             ): Component {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                isOpaque = index != -1 && isSelected
+                border = JBUI.Borders.empty(1, 0)
                 val user = value as? JiraUserService.JiraUser
-                border = JBUI.Borders.empty(4, 6)
                 if (user == null) {
                     text = "Unassigned"
                     icon = null
@@ -712,7 +767,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 else if (user.accountId == currentUserAccountId())
                     Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
                 icon = resolveAssigneeAvatar(user)
-                iconTextGap = 5
+                iconTextGap = 4
                 return this
             }
         }
@@ -725,6 +780,24 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
 
         return combo
+    }
+
+    /** Crops/scales a raw bitmap into a circular avatar icon, matching PrPanel's author avatar style. */
+    private fun makeCircularIcon(raw: BufferedImage, size: Int): ImageIcon {
+        val circle =
+            java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = circle.createGraphics()
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g.setRenderingHint(
+            RenderingHints.KEY_INTERPOLATION,
+            RenderingHints.VALUE_INTERPOLATION_BILINEAR
+        )
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+        g.fillOval(0, 0, size, size)
+        g.composite = AlphaComposite.SrcIn
+        g.drawImage(raw.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
+        g.dispose()
+        return ImageIcon(circle)
     }
 
     private fun currentUserAccountId(): String? =
@@ -773,26 +846,37 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         val url = user.avatarUrl ?: return null
         val cw = cwDir()
         ApplicationManager.getApplication().executeOnPooledThread {
-            var img: ImageIcon? = null
+            var icon: ImageIcon? = null
             if (cw != null) {
                 val cacheFile = JiraUserService.userAvatarCacheFile(cw, user.accountId)
-                if (cacheFile.exists()) img = loadAndScaleFile(cacheFile, 16)
-            }
-            if (img == null) {
-                img = CardUtils.fetchRemoteIcon(url, 16, project.basePath?.let { File(it) }, false)
-                if (img != null && cw != null) {
+                if (cacheFile.exists()) {
                     try {
-                        val cacheFile = JiraUserService.userAvatarCacheFile(cw, user.accountId)
-                        cacheFile.parentFile.mkdirs()
-                        val raw = ImageIO.read(java.net.URL(url))
-                        if (raw != null) ImageIO.write(raw, "png", cacheFile)
+                        ImageIO.read(cacheFile)?.let { icon = makeCircularIcon(it, 16) }
                     } catch (_: Exception) {
                     }
                 }
             }
-            if (img != null) {
-                assigneeAvatarCache[user.accountId] = img
-                SwingUtilities.invokeLater { cardsPanel.repaint() }
+            if (icon == null) {
+                try {
+                    val raw = ImageIO.read(java.net.URL(url))
+                    if (raw != null) {
+                        icon = makeCircularIcon(raw, 16)
+                        if (cw != null) {
+                            try {
+                                val cacheFile =
+                                    JiraUserService.userAvatarCacheFile(cw, user.accountId)
+                                cacheFile.parentFile.mkdirs()
+                                ImageIO.write(raw, "png", cacheFile) // cache the raw square bitmap
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            if (icon != null) {
+                assigneeAvatarCache[user.accountId] = icon
+                SwingUtilities.invokeLater { cardsPanel.revalidate(); cardsPanel.repaint() }
             }
         }
         return null
@@ -1015,6 +1099,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // ── Badge factory ─────────────────────────────────────────────────────────
 
     companion object {
+        private val ARROW_GUTTER =
+            JBUI.scale(26) // room for the caret under the borderless combo UI
 
         fun makeBadge(text: String, initiallyActive: Boolean): JLabel {
             val label = JLabel(text)
