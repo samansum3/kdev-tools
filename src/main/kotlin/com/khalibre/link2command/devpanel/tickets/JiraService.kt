@@ -74,7 +74,7 @@ object JiraService {
             clauses += "type NOT IN (${filters.notTypeFilter.joinToString(",") { "\"$it\"" }})"
 
         val jql = clauses.joinToString(" AND ")
-        return if (jql.isBlank()) "ORDER BY created ASC" else "$jql ORDER BY created ASC"
+        return if (jql.isBlank()) "ORDER BY Rank ASC" else "$jql ORDER BY Rank ASC"
     }
 
     /**
@@ -145,8 +145,8 @@ object JiraService {
 
     /**
      * Inserts "key = <ticketKey>" as an AND-ed clause ahead of any ORDER BY clause in [jql].
-     * [jql] is expected in the shape produced by [buildJql]: "<clauses> ORDER BY created ASC"
-     * or just "ORDER BY created ASC" when there are no clauses.
+     * [jql] is expected in the shape produced by [buildJql]: "<clauses> ORDER BY Rank ASC"
+     * or just "ORDER BY Rank ASC" when there are no clauses.
      */
     private fun scopeJqlToKey(jql: String, ticketKey: String): String {
         val orderByIdx = jql.indexOf("ORDER BY")
