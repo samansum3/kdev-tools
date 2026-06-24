@@ -42,6 +42,15 @@ object JiraMetaService {
         return File(File(cwDir, "icons"), "$safe.png")
     }
 
+    /**
+     * Disk-cache file for a priority icon, keyed by sanitised priority name. e.g. High.png
+     * Prefixed so it can't collide with a type icon of the same name in the shared `icons/` dir.
+     */
+    fun priorityIconCacheFile(cwDir: File, priorityName: String): File {
+        val safe = priorityName.replace(Regex("[^A-Za-z0-9_\\-]"), "_")
+        return File(File(cwDir, "icons"), "priority-$safe.png")
+    }
+
     // ── Statuses ─────────────────────────────────────────────────────────────
 
     /** Returns cached statuses if available, otherwise fetches from Jira and caches. */

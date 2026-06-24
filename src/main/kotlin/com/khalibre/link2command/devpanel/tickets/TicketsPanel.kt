@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.imageio.ImageIO
 import javax.swing.*
 
-class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
+class TicketsPanel(private val project: Project, private val tabId: String) : JPanel(BorderLayout()) {
 
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
@@ -79,7 +79,10 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // typeName → list of pending callbacks (supports multiple badges per type)
     private val typeIconCallbacks = mutableMapOf<String, MutableList<(ImageIcon) -> Unit>>()
     private val typeIconMemCache = mutableMapOf<String, ImageIcon>()   // typeName → resolved icon
-    private val memIconCache = mutableMapOf<String, ImageIcon?>()  // url → icon (priority etc.)
+    // priorityName → list of pending callbacks / resolved icon — same disk+mem caching algorithm
+    // as type icons, keyed by priority name instead of type name.
+    private val priorityIconCallbacks = mutableMapOf<String, MutableList<(ImageIcon) -> Unit>>()
+    private val priorityIconMemCache = mutableMapOf<String, ImageIcon>()
 
     private val transitionsCache = mutableMapOf<String, List<Pair<String, String>>>()
     private var debounceTimer: Timer? = null
@@ -107,10 +110,20 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         buildUi()
         loadFilterStateFromDisk()
         JiraMetaCache.addListener(metaListener)
-        // Trigger initial load — if already cached, callback fires immediately
+        syncFromMetaCacheIfLoaded()
+        // Trigger initial load — if already cached, callback fires immediately;
+        // if another tab already triggered it, this is a no-op (handled above instead).
         val cw = cwDir()
         if (cw != null) JiraMetaCache.load(cw)
         loadAssignableUsers()
+    }
+
+    override fun addNotify() {
+        super.addNotify()
+        JiraMetaCache.addListener(metaListener)
+        // Re-attaching after being hidden (e.g. switching Tickets sub-tabs) may have missed
+        // updates that happened while this tab's listener was detached — catch up now.
+        syncFromMetaCacheIfLoaded()
     }
 
     override fun removeNotify() {
@@ -118,19 +131,25 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         JiraMetaCache.removeListener(metaListener)
     }
 
-    // ── git/cw ────────────────────────────────────────────────────────────────
-
-    private fun gitRoot(): File? {
-        val base = project.basePath ?: return null
-        var dir = File(base)
-        while (dir.parentFile != null) {
-            if (File(dir, ".git").isDirectory) return dir
-            dir = dir.parentFile
+    /**
+     * [JiraMetaCache.load] is a no-op once another tab/instance has already populated the cache
+     * for this project, so a freshly-built TicketsPanel would otherwise never receive the data
+     * it needs to build its status/type filter badges until the *next* cache change. Calling the
+     * listener directly with whatever's already cached fixes that without waiting on an event.
+     */
+    private fun syncFromMetaCacheIfLoaded() {
+        val current = JiraMetaCache.current()
+        if (current.statuses.isNotEmpty() || current.types.isNotEmpty()) {
+            metaListener(current)
         }
-        return null
     }
 
-    fun cwDir(): File? = gitRoot()?.let { File(it, ".git/cw") }
+    // ── git/cw ────────────────────────────────────────────────────────────────
+
+    fun cwDir(): File? = com.khalibre.link2command.devpanel.common.ProjectPaths.cwDir(project)
+
+    /** Per-tab state dir for this tab's own parent keys / fix version / filters. */
+    private fun tabStateDir(): File? = cwDir()?.let { TicketTabsStore.tabStateDir(it, tabId) }
 
     private fun loadAssignableUsers() {
         val cw = cwDir() ?: return
@@ -202,8 +221,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     // ── Persistence ───────────────────────────────────────────────────────────
 
     private fun loadFilterStateFromDisk() {
-        val cw = cwDir() ?: return
-        val filtersFile = File(cw, "filters.json")
+        val dir = tabStateDir() ?: return
+        val filtersFile = File(dir, "filters.json")
         if (!filtersFile.exists()) return
         try {
             @Suppress("UNCHECKED_CAST")
@@ -211,8 +230,8 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
                 Gson().fromJson(filtersFile.readText(), Map::class.java) as Map<String, Boolean>
             pendingFilterState = map
 
-            val parentFile = File(cw, "parent-tickets")
-            val versionFile = File(cw, "fix-version")
+            val parentFile = File(dir, "parent-tickets")
+            val versionFile = File(dir, "fix-version")
             if (parentKeysField.text.isBlank() && parentFile.exists()) {
                 val keys = parentFile.readLines().map { it.trim() }
                     .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
@@ -245,17 +264,17 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun saveToGitCw() {
-        val cw = cwDir() ?: return
-        cw.mkdirs()
+        val dir = tabStateDir() ?: return
+        dir.mkdirs()
 
         val keys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-        if (keys.isNotEmpty()) File(cw, "parent-tickets").writeText(keys.joinToString("\n"))
-        else File(cw, "parent-tickets").delete()
+        if (keys.isNotEmpty()) File(dir, "parent-tickets").writeText(keys.joinToString("\n"))
+        else File(dir, "parent-tickets").delete()
 
         val ver = fixVersionField.text.trim()
-        if (ver.isNotBlank()) File(cw, "fix-version").writeText(ver)
-        else File(cw, "fix-version").delete()
+        if (ver.isNotBlank()) File(dir, "fix-version").writeText(ver)
+        else File(dir, "fix-version").delete()
 
         fun active(b: JLabel) = b.getClientProperty("active") == true
         val map = mutableMapOf(
@@ -270,7 +289,7 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
             .forEach { (b, i) -> map["notType_${i.name}"] = active(b) }
         map["filtersExpanded"] = filtersExpanded
         try {
-            File(cw, "filters.json").writeText(Gson().toJson(map))
+            File(dir, "filters.json").writeText(Gson().toJson(map))
         } catch (_: Exception) {
         }
     }
@@ -599,7 +618,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         ticket.priority?.let { priorityName ->
             val iconLabel =
                 JLabel().apply { preferredSize = Dimension(14, 14); toolTipText = priorityName }
-            loadIconAsync(ticket.priorityIconUrl, 14) { iconLabel.icon = it; metaPanel.repaint() }
+            loadPriorityIconAsync(priorityName, ticket.priorityIconUrl, 14) {
+                iconLabel.icon = it; metaPanel.repaint()
+            }
             metaPanel.add(iconLabel)
             metaPanel.add(Box.createHorizontalStrut(2))
             metaPanel.add(JBLabel(priorityName).apply {
@@ -889,7 +910,9 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
         val isUnassigned = ticket.assigneeName == null
-        if (isUnassigned || ticket.status == "Failed QA")
+        val devTypes = DevConfig.load().ticket.developmentTypes.toSet()
+        val isEligibleType = devTypes.isEmpty() || ticket.issueType in devTypes
+        if ((isUnassigned || ticket.status == "Failed QA") && isEligibleType)
             panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
         panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
 
@@ -1003,6 +1026,59 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    /**
+     * Same caching algorithm as [loadTicketTypeIconAsync] (mem cache → named disk cache →
+     * remote fetch, with queued multi-callback support), keyed by priority name instead of type name.
+     */
+    fun loadPriorityIconAsync(
+        priorityName: String,
+        url: String?,
+        size: Int,
+        onLoaded: (ImageIcon) -> Unit
+    ) {
+        // Already resolved
+        priorityIconMemCache[priorityName]?.let { icon ->
+            onLoaded(scaleIcon(icon, size)); return
+        }
+
+        // Queue the callback; if first caller, kick off the load
+        val callbacks = priorityIconCallbacks.getOrPut(priorityName) { mutableListOf() }
+        callbacks += onLoaded
+        if (callbacks.size > 1) return  // load already in flight
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val cw = cwDir()
+            var img: ImageIcon? = null
+
+            if (cw != null) {
+                val cacheFile = JiraMetaService.priorityIconCacheFile(cw, priorityName)
+                if (cacheFile.exists()) img = loadAndScaleFile(cacheFile, size)
+            }
+
+            if (img == null && !url.isNullOrBlank()) {
+                img =
+                    CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, false)
+                // Persist to named cache file
+                if (img != null && cw != null) {
+                    try {
+                        val cacheFile = JiraMetaService.priorityIconCacheFile(cw, priorityName)
+                        cacheFile.parentFile.mkdirs()
+                        val raw = ImageIO.read(java.net.URL(url))
+                        if (raw != null) ImageIO.write(raw, "png", cacheFile)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            val finalImg = img ?: return@executeOnPooledThread
+            priorityIconMemCache[priorityName] = finalImg
+
+            SwingUtilities.invokeLater {
+                priorityIconCallbacks.remove(priorityName)?.forEach { cb -> cb(scaleIcon(finalImg, size)) }
+            }
+        }
+    }
+
     private fun scaleIcon(icon: ImageIcon, size: Int): ImageIcon {
         if (icon.iconWidth == size && icon.iconHeight == size) return icon
         val buf =
@@ -1016,20 +1092,6 @@ class TicketsPanel(private val project: Project) : JPanel(BorderLayout()) {
         g.drawImage(icon.image.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
         g.dispose()
         return ImageIcon(buf)
-    }
-
-    private fun loadIconAsync(url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
-        if (url.isNullOrBlank()) return
-        memIconCache[url]?.let { onLoaded(it); return }
-        if (memIconCache.containsKey(url)) return
-        memIconCache[url] = null
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val img = CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, true)
-            if (img != null) {
-                memIconCache[url] = img
-                SwingUtilities.invokeLater { onLoaded(img) }
-            }
-        }
     }
 
     private fun loadAndScaleFile(file: File, size: Int): ImageIcon? {

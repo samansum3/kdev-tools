@@ -35,7 +35,7 @@ object JiraMetaCache {
     fun current(): State = state
 
     fun addListener(listener: (State) -> Unit) {
-        synchronized(listeners) { listeners.add(listener) }
+        synchronized(listeners) { if (listener !in listeners) listeners.add(listener) }
     }
 
     fun removeListener(listener: (State) -> Unit) {

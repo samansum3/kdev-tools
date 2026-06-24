@@ -48,6 +48,7 @@ class TicketConfigPanel(
     // Excluded badge lists
     private var excludedStatusBadges: List<JLabel> = emptyList()
     private var excludedTypeBadges: List<JLabel> = emptyList()
+    private var developmentTypeBadges: List<JLabel> = emptyList()
 
     // Containers rebuilt when meta changes
     private val doneStatusesContainer =
@@ -56,10 +57,13 @@ class TicketConfigPanel(
         JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
     private val excludedTypeWrap =
         JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
+    private val developmentTypeWrap =
+        JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply { isOpaque = false }
 
-    // Header rows for the two collapsed excluded sections (stored so we can refresh their count labels)
+    // Header rows for the collapsed sections (stored so we can refresh their count labels)
     private lateinit var excludedStatusHeader: JPanel
     private lateinit var excludedTypeHeader: JPanel
+    private lateinit var developmentTypeHeader: JPanel
 
     private val statusLabel = JBLabel("").apply {
         font = font.deriveFont(font.size - 1f)
@@ -100,6 +104,16 @@ class TicketConfigPanel(
                 wrapPanel = excludedTypeWrap,
                 getBadges = { excludedTypeBadges }
             ).also { excludedTypeHeader = it })
+        form.add(Box.createVerticalStrut(12))
+
+        // ── Development types ───────────────────────────────────────────────
+        form.add(
+            buildCollapsibleExcludedSection(
+                label = "Development types",
+                hint = "ticket types eligible for the \"Pick\" action button",
+                wrapPanel = developmentTypeWrap,
+                getBadges = { developmentTypeBadges }
+            ).also { developmentTypeHeader = it })
         form.add(Box.createVerticalStrut(20))
 
         // ── ACTIONS ──────────────────────────────────────────────────────────
@@ -425,6 +439,23 @@ class TicketConfigPanel(
         excludedTypeWrap.removeAll()
         excludedTypeBadges.forEach { excludedTypeWrap.add(it) }
         excludedTypeWrap.revalidate(); excludedTypeWrap.repaint()
+
+        developmentTypeBadges = allTypes.map { info ->
+            makeConfigBadge(info.name, false).also { badge ->
+                loadTypeIcon(info.name, info.iconUrl, 12) { icon ->
+                    badge.icon = icon; badge.iconTextGap = 3
+                    badge.revalidate(); badge.repaint()
+                }
+                badge.addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        SwingUtilities.invokeLater { refreshExcludedHeader(developmentTypeHeader) }
+                    }
+                })
+            }
+        }
+        developmentTypeWrap.removeAll()
+        developmentTypeBadges.forEach { developmentTypeWrap.add(it) }
+        developmentTypeWrap.revalidate(); developmentTypeWrap.repaint()
     }
 
     // ── Apply saved config ────────────────────────────────────────────────────
@@ -450,11 +481,18 @@ class TicketConfigPanel(
             badge.putClientProperty("active", info.name in excTypes)
             TicketsPanel.applyBadgeStyle(badge)
         }
+        // Development types
+        val devTypes = cfg.developmentTypes.toSet()
+        developmentTypeBadges.zip(allTypes).forEach { (badge, info) ->
+            badge.putClientProperty("active", info.name in devTypes)
+            TicketsPanel.applyBadgeStyle(badge)
+        }
         // Refresh all done-status header labels to show correct counts
         refreshAllDoneHeaders()
         // Refresh excluded section header counts
         if (::excludedStatusHeader.isInitialized) refreshExcludedHeader(excludedStatusHeader)
         if (::excludedTypeHeader.isInitialized) refreshExcludedHeader(excludedTypeHeader)
+        if (::developmentTypeHeader.isInitialized) refreshExcludedHeader(developmentTypeHeader)
     }
 
     private fun refreshAllDoneHeaders() {
@@ -480,6 +518,7 @@ class TicketConfigPanel(
         }
         val excludedStatuses = activeBadgeNames(excludedStatusBadges, allStatuses)
         val excludedTypes = activeBadgeNames(excludedTypeBadges, allTypes.map { it.name })
+        val developmentTypes = activeBadgeNames(developmentTypeBadges, allTypes.map { it.name })
 
         val existing = DevConfig.load()
         DevConfig.save(
@@ -487,7 +526,8 @@ class TicketConfigPanel(
                 ticket = TicketConfig(
                     doneStatusesByType = doneByType,
                     excludedStatuses = excludedStatuses,
-                    excludedTypes = excludedTypes
+                    excludedTypes = excludedTypes,
+                    developmentTypes = developmentTypes
                 )
             )
         )

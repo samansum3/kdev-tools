@@ -31,9 +31,9 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         font = font.deriveFont(font.size - 1f)
     }
 
-    // TicketConfigPanel is created lazily; it needs a reference back to TicketsPanel
+    // TicketConfigPanel is created lazily; it needs a reference back to the active TicketsPanel
     private var ticketConfigPanel: TicketConfigPanel? = null
-    private var ticketsPanelRef: TicketsPanel? = null
+    private var ticketsPanelSupplier: (() -> TicketsPanel?)? = null
 
     private val subTabs = JBTabbedPane()
 
@@ -45,10 +45,9 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         loadRemotes()
     }
 
-    fun setTicketsPanel(tp: TicketsPanel) {
-        ticketsPanelRef = tp
-        // Inject into TicketConfigPanel if already created
-        (subTabs.getComponentAt(1) as? TicketConfigPanel)?.let { /* already wired */ }
+    /** [supplier] should return whichever TicketsPanel sub-tab is currently active. */
+    fun setTicketsPanel(supplier: () -> TicketsPanel?) {
+        ticketsPanelSupplier = supplier
     }
 
     private fun buildUi() {
@@ -57,17 +56,8 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         // ── Ticket Config sub-tab ─────────────────────────────────────────────
         val tcp = TicketConfigPanel(
-            getTicketsPanel = { ticketsPanelRef },
-            getCwDir = {
-                val base = project.basePath ?: return@TicketConfigPanel null
-                var dir = java.io.File(base)
-                while (dir.parentFile != null) {
-                    if (java.io.File(dir, ".git").isDirectory)
-                        return@TicketConfigPanel java.io.File(dir, ".git/cw")
-                    dir = dir.parentFile
-                }
-                null
-            }
+            getTicketsPanel = { ticketsPanelSupplier?.invoke() },
+            getCwDir = { com.khalibre.link2command.devpanel.common.ProjectPaths.cwDir(project) }
         )
         ticketConfigPanel = tcp
 

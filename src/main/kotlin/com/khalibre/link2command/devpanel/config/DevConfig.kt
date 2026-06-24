@@ -24,11 +24,14 @@ data class JiraConfig(
  *                         Used by the "Hide Done" JQL clause.
  * [excludedStatuses]    — statuses hidden from the Tickets > Status filter badges.
  * [excludedTypes]       — issue types hidden from Tickets > type / not-type filter badges.
+ * [developmentTypes]    — issue types eligible to show the "Pick" action button on a ticket card.
+ *                         If empty, every type is eligible (keeps prior behaviour for unconfigured projects).
  */
 data class TicketConfig(
     val doneStatusesByType: Map<String, List<String>> = emptyMap(),
     val excludedStatuses: List<String> = emptyList(),
-    val excludedTypes: List<String> = emptyList()
+    val excludedTypes: List<String> = emptyList(),
+    val developmentTypes: List<String> = emptyList()
 )
 
 data class DevConfig(
