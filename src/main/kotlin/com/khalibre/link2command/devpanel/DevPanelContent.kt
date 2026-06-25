@@ -5,7 +5,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBTabbedPane
 import com.khalibre.link2command.devpanel.common.ProjectPaths
 import com.khalibre.link2command.devpanel.config.ConfigPanel
-import com.khalibre.link2command.devpanel.pr.PrPanel
+import com.khalibre.link2command.devpanel.pr.PrTabsPanel
 import com.khalibre.link2command.devpanel.tickets.TicketTabsPanel
 import java.awt.BorderLayout
 import java.io.File
@@ -14,13 +14,13 @@ import javax.swing.SwingUtilities
 
 class DevPanelContent(private val project: Project) : JPanel(BorderLayout()) {
 
-    private val prPanel = PrPanel(project)
+    private val prTabsPanel = PrTabsPanel(project)
     private val ticketTabsPanel = TicketTabsPanel(project)
     private val configPanel =
         ConfigPanel(project).also { it.setTicketsPanel { ticketTabsPanel.activeTicketsPanel() } }
 
     private val tabs = JBTabbedPane().apply {
-        addTab("PR Tools", prPanel)
+        addTab("PR Tools", prTabsPanel)
         addTab("Tickets", ticketTabsPanel)
         addTab("Config", configPanel)
     }
@@ -37,7 +37,7 @@ class DevPanelContent(private val project: Project) : JPanel(BorderLayout()) {
 
     fun refreshCurrentTab() {
         when (tabs.selectedIndex) {
-            0 -> prPanel.refresh()
+            0 -> prTabsPanel.refreshActive()
             1 -> ticketTabsPanel.refreshActive()
             2 -> configPanel.loadConfig()
         }

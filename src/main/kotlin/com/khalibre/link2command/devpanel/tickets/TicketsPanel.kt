@@ -18,9 +18,14 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.imageio.ImageIO
 import javax.swing.*
 
-class TicketsPanel(private val project: Project, private val tabId: String) : JPanel(BorderLayout()) {
+class TicketsPanel(
+    private val project: Project,
+    private val tabId: String,
+    private val onLoadingChanged: (Boolean) -> Unit = {}
+) : JPanel(BorderLayout()) {
 
     private val parentKeysField = JBTextField().apply { toolTipText = "e.g. CW-36000, CW-36001" }
+    private val linkedKeysField = JBTextField().apply { toolTipText = "e.g. CW-123, CW-456" }
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
     // owner badges (mutually exclusive)
@@ -51,7 +56,13 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
     private lateinit var filtersBody: JPanel
     private lateinit var filterToggleLabel: JLabel
 
-    private val searchField = JBTextField().apply {
+    private val clearSearchExtension = com.intellij.ui.components.fields.ExtendableTextComponent.Extension.create(
+        com.intellij.icons.AllIcons.Actions.Close,
+        com.intellij.icons.AllIcons.Actions.CloseHovered,
+        "Clear search"
+    ) { clearSearch() }
+
+    private val searchField = com.intellij.ui.components.fields.ExtendableTextField().apply {
         toolTipText = "Search by summary or key..."; emptyText.text = "Search by summary or key..."
     }
     private val searchInfoLabel = JBLabel("").apply {
@@ -231,15 +242,29 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
             pendingFilterState = map
 
             val parentFile = File(dir, "parent-tickets")
+            val linkedFile = File(dir, "linked-tickets")
             val versionFile = File(dir, "fix-version")
+            val searchFile = File(dir, "search")
             if (parentKeysField.text.isBlank() && parentFile.exists()) {
                 val keys = parentFile.readLines().map { it.trim() }
                     .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
                 if (keys.isNotEmpty()) parentKeysField.text = keys.joinToString(", ")
             }
+            if (linkedKeysField.text.isBlank() && linkedFile.exists()) {
+                val keys = linkedFile.readLines().map { it.trim() }
+                    .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+                if (keys.isNotEmpty()) linkedKeysField.text = keys.joinToString(", ")
+            }
             if (fixVersionField.text.isBlank() && versionFile.exists()) {
                 val v = versionFile.readText().trim()
                 if (v.isNotBlank()) fixVersionField.text = v
+            }
+            if (searchField.text.isBlank() && searchFile.exists()) {
+                val s = searchFile.readText().trim()
+                if (s.isNotBlank()) {
+                    searchField.text = s
+                    updateSearchClearIcon()
+                }
             }
             filtersExpanded = map["filtersExpanded"] ?: true
             filtersBody.isVisible = filtersExpanded
@@ -272,9 +297,18 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         if (keys.isNotEmpty()) File(dir, "parent-tickets").writeText(keys.joinToString("\n"))
         else File(dir, "parent-tickets").delete()
 
+        val linkedKeys = linkedKeysField.text.split(",").map { it.trim().uppercase() }
+            .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+        if (linkedKeys.isNotEmpty()) File(dir, "linked-tickets").writeText(linkedKeys.joinToString("\n"))
+        else File(dir, "linked-tickets").delete()
+
         val ver = fixVersionField.text.trim()
         if (ver.isNotBlank()) File(dir, "fix-version").writeText(ver)
         else File(dir, "fix-version").delete()
+
+        val search = searchField.text.trim()
+        if (search.isNotBlank()) File(dir, "search").writeText(search)
+        else File(dir, "search").delete()
 
         fun active(b: JLabel) = b.getClientProperty("active") == true
         val map = mutableMapOf(
@@ -305,7 +339,7 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         }
 
         // Input row
-        val inputRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
+        val inputRow = JPanel(GridLayout(1, 3, 6, 0)).apply {
             isOpaque = false; maximumSize = Dimension(Int.MAX_VALUE, 54)
         }
 
@@ -319,6 +353,7 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
             return p
         }
         inputRow.add(inputBlock("parent tickets", parentKeysField))
+        inputRow.add(inputBlock("linked to tickets", linkedKeysField))
         inputRow.add(inputBlock("fix version", fixVersionField))
         topPanel.add(inputRow)
         topPanel.add(Box.createVerticalStrut(8))
@@ -353,11 +388,13 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         add(scroll, BorderLayout.CENTER)
 
         parentKeysField.addActionListener { refresh() }
+        linkedKeysField.addActionListener { refresh() }
         fixVersionField.addActionListener { refresh() }
+        updateSearchClearIcon()
         searchField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = onSearchTextChanged()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = onSearchTextChanged()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = onSearchTextChanged()
         })
 
         loadFilterStateFromDisk()
@@ -460,11 +497,33 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         debounceTimer = Timer(DEBOUNCE_MS) { doRefresh() }.apply { isRepeats = false; start() }
     }
 
+    private fun onSearchTextChanged() {
+        applySearch()
+        updateSearchClearIcon()
+        saveToGitCw()
+    }
+
+    /** Shows the "x" clear icon inside the search box only while it has text. */
+    private fun updateSearchClearIcon() {
+        val hasText = searchField.text.isNotEmpty()
+        val hasExtension = searchField.getExtensions().contains(clearSearchExtension)
+        if (hasText && !hasExtension) searchField.addExtension(clearSearchExtension)
+        else if (!hasText && hasExtension) searchField.removeExtension(clearSearchExtension)
+    }
+
+    /** Clicking the search box's "x": clear the text, clear the saved keyword, and reload data. */
+    private fun clearSearch() {
+        searchField.text = ""
+        updateSearchClearIcon()
+        saveToGitCw()
+        refresh()
+    }
+
     private fun doRefresh() {
         val filters = buildFilters()
-        if (filters.parentKeys.isEmpty() && filters.fixVersion.isBlank()) {
+        if (filters.parentKeys.isEmpty() && filters.linkedKeys.isEmpty() && filters.fixVersion.isBlank()) {
             cardsPanel.removeAll()
-            cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s) or a fix version to load tickets.</i></html>").apply {
+            cardsPanel.add(JBLabel("<html><i>Enter parent ticket(s), linked ticket(s), or a fix version to load tickets.</i></html>").apply {
                 border = JBUI.Borders.empty(16, 4)
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
             })
@@ -473,7 +532,7 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         }
 
         saveToGitCw()
-        setStatus("Loading…")
+        onLoadingChanged(true)
         val myGeneration = requestGeneration.incrementAndGet()
 
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -486,11 +545,13 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
                     currentJql = jql
                     allLoadedTickets = tickets
                     applySearch(); setStatus("")
+                    onLoadingChanged(false)
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
                     if (requestGeneration.get() != myGeneration) return@invokeLater
                     setStatus("Error: ${e.message?.take(80)}")
+                    onLoadingChanged(false)
                     cardsPanel.removeAll()
                     cardsPanel.add(JBLabel("<html>${CardUtils.escHtml(e.message ?: "Unknown error")}</html>").apply {
                         border = JBUI.Borders.empty(12, 4)
@@ -540,6 +601,8 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
     private fun buildFilters(): TicketFilters {
         val parentKeys = parentKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
+        val linkedKeys = linkedKeysField.text.split(",").map { it.trim().uppercase() }
+            .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
         val activeStatuses = statusBadges.zip(visibleStatuses)
             .filter { (b, _) -> b.getClientProperty("active") == true }
             .map { (_, n) -> n }.toSet()
@@ -556,6 +619,7 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
         fun active(b: JLabel) = b.getClientProperty("active") == true
         return TicketFilters(
             parentKeys = parentKeys,
+            linkedKeys = linkedKeys,
             fixVersion = fixVersionField.text.trim(),
             myTasks = active(badgeMyTasks),
             unassigned = active(badgeUnassigned),
@@ -950,22 +1014,17 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
     private fun renderTransitionButtons(
         panel: JPanel, ticket: JiraTicket, isMe: Boolean, transitions: List<Pair<String, String>>
     ) {
+        // Collected so that clicking any one of them immediately disables all of them for this
+        // card — prevents double-clicks/extra transitions while the request is in flight.
+        // They get naturally reset once the card is rebuilt on a successful refresh; on failure
+        // (no refresh happens) we explicitly re-enable them below.
+        val transitionButtons = mutableListOf<JButton>()
         transitions.forEach { (targetStatus, transitionName) ->
             val (bg, fg) = resolveStatusColors(targetStatus)
-            val btn = if (targetStatus == "In Progress")
-                CardUtils.makeTransitionButton(
-                    targetStatus,
-                    transitionName,
-                    bg,
-                    fg
-                ) { doTransitionInProgress(ticket.key) }
-            else
-                CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
-                    doTransition(
-                        ticket.key,
-                        targetStatus
-                    )
-                }
+            val btn = CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
+                performTransition(ticket.key, targetStatus, transitionButtons)
+            }
+            transitionButtons += btn
             panel.add(btn)
         }
     }
@@ -1115,14 +1174,28 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
 
     // ── Transition helpers ────────────────────────────────────────────────────
 
-    private fun doTransition(key: String, targetStatus: String) {
+    /**
+     * Disables every transition button on this card immediately (synchronously, before the
+     * network call even starts) so a user can't fire off a second transition while the first
+     * is still in flight. On success the card gets entirely rebuilt by [refresh] — fresh buttons,
+     * naturally re-enabled. On failure no rebuild happens, so we explicitly reset the card's
+     * buttons back to enabled here.
+     */
+    private fun performTransition(key: String, targetStatus: String, cardButtons: List<JButton>) {
+        cardButtons.forEach { it.isEnabled = false }
         setStatus("$key → $targetStatus…")
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.transitionTicket(key, targetStatus)
+            val result = if (targetStatus == "In Progress")
+                JiraService.transitionToInProgress(key)
+            else
+                JiraService.transitionTicket(key, targetStatus)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
                     setStatus("✓ $key → $targetStatus"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                } else {
+                    setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                    cardButtons.forEach { it.isEnabled = true }
+                }
             }
         }
     }
@@ -1134,18 +1207,6 @@ class TicketsPanel(private val project: Project, private val tabId: String) : JP
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
                     setStatus("✓ $key: branch created, In Progress"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-            }
-        }
-    }
-
-    private fun doTransitionInProgress(key: String) {
-        setStatus("$key → In Progress…")
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.transitionToInProgress(key)
-            SwingUtilities.invokeLater {
-                if (result.isSuccess) {
-                    setStatus("✓ $key → In Progress"); refresh()
                 } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
             }
         }

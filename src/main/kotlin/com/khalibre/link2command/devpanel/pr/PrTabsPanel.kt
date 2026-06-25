@@ -1,4 +1,4 @@
-package com.khalibre.link2command.devpanel.tickets
+package com.khalibre.link2command.devpanel.pr
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
@@ -16,26 +16,26 @@ import javax.swing.*
 import javax.swing.border.CompoundBorder
 
 /**
- * Hosts multiple [TicketsPanel] instances behind a compact, browser-style sub-tab strip.
+ * Hosts multiple [PrPanel] instances behind a compact, browser-style sub-tab strip —
+ * the PR Tools counterpart of [com.khalibre.link2command.devpanel.tickets.TicketTabsPanel].
  *
- * Each sub-tab keeps its own parent-ticket/fix-version/filter state (see [TicketsPanel] +
- * [TicketTabsStore]), so the person can keep several differently-configured ticket lists
- * (e.g. one per parent ticket or fix version) and flip between them.
+ * Each sub-tab keeps its own base-branch/author selection (see [PrPanel] + [PrTabsStore]),
+ * so the person can keep several differently-filtered PR lists open and flip between them.
  *
  * Tabs are named A, B, C … by default, renamable via double-click, and closable via an
- * "×" affordance — mirroring the IDE terminal tab UX. At least one tab is always kept open.
+ * "×" affordance. At least one tab is always kept open.
  */
-class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
+class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun cwDir() = ProjectPaths.cwDir(project)
 
-    private var state: TicketTabsState = cwDir()?.let { TicketTabsStore.load(it) }
-        ?: TicketTabsState(
-            tabs = listOf(TicketTabConfig(TicketTabsStore.newTabId(), "A")),
+    private var state: PrTabsState = cwDir()?.let { PrTabsStore.load(it) }
+        ?: PrTabsState(
+            tabs = listOf(PrTabConfig(PrTabsStore.newTabId(), "A")),
             selectedTabId = ""
         ).let { it.copy(selectedTabId = it.tabs.first().id) }
 
-    private val panels = mutableMapOf<String, TicketsPanel>()
+    private val panels = mutableMapOf<String, PrPanel>()
 
     private val tabStripRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
         isOpaque = false
@@ -44,8 +44,7 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // Reload icon pulled to the right of the sub-tab strip — same effect as the toolbar
     // sync icon, but scoped to "reload the current tab's data". Spins while that tab's
-    // TicketsPanel is loading (see the onLoadingChanged callback passed into panelFor()),
-    // and replaces the old inline "Loading…" text entirely.
+    // PrPanel is loading, replacing the old inline "Loading…" text entirely.
     private val reloadButton = JButton(AllIcons.Actions.Refresh).apply {
         toolTipText = "Reload current tab"
         isFocusPainted = false; isBorderPainted = false; isContentAreaFilled = false
@@ -79,7 +78,6 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     init {
         val stripRowWrap = JPanel(BorderLayout()).apply {
             isOpaque = false
-            // Compact: noticeably shorter than the main JBTabbedPane tabs above this one.
             maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(22))
             preferredSize = Dimension(preferredSize.width, JBUI.scale(22))
             add(tabStripRow, BorderLayout.WEST)
@@ -96,7 +94,6 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
             isOpaque = false
             border = JBUI.Borders.emptyBottom(4)
             add(stripRowWrap)
-//            add(Box.createVerticalStrut(3))
             add(separator)
         }
         add(north, BorderLayout.NORTH)
@@ -109,18 +106,18 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         showTab(state.selectedTabId)
     }
 
-    /** The currently visible tab's [TicketsPanel] — used e.g. by Config's icon-cache delegate. */
-    fun activeTicketsPanel(): TicketsPanel? = panels[state.selectedTabId]
+    /** The currently visible tab's [PrPanel] — used e.g. by the toolbar refresh action. */
+    fun activePrPanel(): PrPanel? = panels[state.selectedTabId]
 
     fun refreshActive() {
-        activeTicketsPanel()?.refresh()
+        activePrPanel()?.refresh()
     }
 
     // ── Tab lifecycle ────────────────────────────────────────────────────────
 
-    private fun panelFor(tabId: String): TicketsPanel =
+    private fun panelFor(tabId: String): PrPanel =
         panels.getOrPut(tabId) {
-            TicketsPanel(project, tabId) { loading ->
+            PrPanel(project, tabId) { loading ->
                 if (tabId == state.selectedTabId) setReloadSpinning(loading)
             }
         }
@@ -143,7 +140,7 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun addTab() {
-        val newTab = TicketTabConfig(TicketTabsStore.newTabId(), TicketTabsStore.nextTabName(state.tabs))
+        val newTab = PrTabConfig(PrTabsStore.newTabId(), PrTabsStore.nextTabName(state.tabs))
         state = state.copy(tabs = state.tabs + newTab, selectedTabId = newTab.id)
         persist()
         rebuildStrip()
@@ -161,7 +158,7 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         state = state.copy(tabs = remaining, selectedTabId = newSelected)
         panels.remove(tabId)
-        cwDir()?.let { TicketTabsStore.deleteTabState(it, tabId) }
+        cwDir()?.let { PrTabsStore.deleteTabState(it, tabId) }
         persist()
         rebuildStrip()
         showTab(newSelected)
@@ -179,7 +176,7 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun persist() {
-        cwDir()?.let { TicketTabsStore.save(it, state) }
+        cwDir()?.let { PrTabsStore.save(it, state) }
     }
 
     // ── Tab strip UI ─────────────────────────────────────────────────────────
@@ -216,9 +213,9 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     /**
      * Flat, text-only tab — no pill/badge background, just a name, an "×" to close, and a thin
-     * accent underline on whichever tab is selected (mirroring the IDE's own terminal tabs).
+     * accent underline on whichever tab is selected.
      */
-    private fun buildTabPill(tab: TicketTabConfig): JComponent {
+    private fun buildTabPill(tab: PrTabConfig): JComponent {
         val isSelected = tab.id == state.selectedTabId
         val normalFg = JBUI.CurrentTheme.Label.disabledForeground()
         val selectedFg = JBUI.CurrentTheme.Label.foreground()
@@ -282,8 +279,8 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         return tabPanel
     }
 
-    /** Double-click-to-rename: swaps the name label for an inline text field, like a Webstorm terminal tab. */
-    private fun startRename(tab: TicketTabConfig, nameLabel: JLabel, tabPanel: JPanel) {
+    /** Double-click-to-rename: swaps the name label for an inline text field. */
+    private fun startRename(tab: PrTabConfig, nameLabel: JLabel, tabPanel: JPanel) {
         val field = JTextField(tab.name).apply {
             font = nameLabel.font
             border = JBUI.Borders.empty(0, 2)

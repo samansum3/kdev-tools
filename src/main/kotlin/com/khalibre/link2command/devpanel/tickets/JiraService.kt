@@ -24,6 +24,7 @@ data class JiraTicket(
 
 data class TicketFilters(
     val parentKeys: List<String> = emptyList(),
+    val linkedKeys: List<String> = emptyList(),
     val fixVersion: String = "",
     val myTasks: Boolean = false,
     val unassigned: Boolean = false,
@@ -42,10 +43,13 @@ object JiraService {
     fun buildJql(filters: TicketFilters, currentUserEmail: String?): String {
         val clauses = mutableListOf<String>()
 
-        // Scope: parent keys OR fix version
+        // Scope: parent keys OR linked-to keys OR fix version
         val scopeParts = mutableListOf<String>()
         if (filters.parentKeys.isNotEmpty())
             scopeParts += "parent in (${filters.parentKeys.joinToString(",") { "\"$it\"" }})"
+        if (filters.linkedKeys.isNotEmpty())
+            scopeParts += filters.linkedKeys.joinToString(" OR ") { "issue in linkedIssues(\"$it\")" }
+                .let { if (filters.linkedKeys.size > 1) "($it)" else it }
         if (filters.fixVersion.isNotBlank())
             scopeParts += "fixVersion = ${filters.fixVersion}"
         if (scopeParts.isNotEmpty())
@@ -151,7 +155,7 @@ object JiraService {
     private fun scopeJqlToKey(jql: String, ticketKey: String): String {
         val orderByIdx = jql.indexOf("ORDER BY")
         val clauses = if (orderByIdx >= 0) jql.substring(0, orderByIdx).trim() else jql.trim()
-        val orderBy = if (orderByIdx >= 0) jql.substring(orderByIdx) else "ORDER BY created ASC"
+        val orderBy = if (orderByIdx >= 0) jql.substring(orderByIdx) else "ORDER BY Rank ASC"
         val keyClause = "key = \"$ticketKey\""
         val combined = if (clauses.isBlank()) keyClause else "($clauses) AND $keyClause"
         return "$combined $orderBy"

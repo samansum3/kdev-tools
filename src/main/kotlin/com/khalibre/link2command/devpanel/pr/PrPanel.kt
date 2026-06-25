@@ -13,7 +13,11 @@ import java.awt.*
 import java.awt.event.ActionListener
 import javax.swing.*
 
-class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
+class PrPanel(
+    private val project: Project,
+    private val tabId: String,
+    private val onLoadingChanged: (Boolean) -> Unit = {}
+) : JPanel(BorderLayout()) {
 
     private val baseBranchCombo = JComboBox<String>()
     private val authorCombo = JComboBox<String>()
@@ -26,8 +30,19 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var upstreamRepo: String? = null
     private var ghUser: String? = null
 
-    private val baseBranchListener = ActionListener { refresh() }
-    private val authorListener = ActionListener { refresh() }
+    // Remembered (persisted to disk) base-branch/author selections for this tab, used as the
+    // fallback default the first time each combo is populated in this session.
+    private var savedBaseBranch: String? = null
+    private var savedAuthor: String? = null
+
+    // The most recent full fetch (server-filtered by whatever base/author was selected at the
+    // time). Used to render an instant, locally-filtered preview the moment the user changes
+    // base/author again — before the authoritative re-fetch for the new filter comes back.
+    private var lastLoadedPrs: List<PullRequest> = emptyList()
+    private var lastLoadedRepo: String? = null
+
+    private val baseBranchListener = ActionListener { onFilterChanged() }
+    private val authorListener = ActionListener { onFilterChanged() }
 
     private val syncButton = JButton(AllIcons.Actions.Refresh).apply {
         toolTipText = "Fetch upstream branches (git fetch upstream --prune)"
@@ -46,9 +61,34 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     init {
         border = JBUI.Borders.empty(8, 10)
+        loadTabStateFromDisk()
         buildUi()
         loadUpstreamBranches()
         loadAuthors()
+    }
+
+    private fun tabStateDir(): java.io.File? =
+        com.khalibre.link2command.devpanel.common.ProjectPaths.cwDir(project)
+            ?.let { PrTabsStore.tabStateDir(it, tabId) }
+
+    private fun loadTabStateFromDisk() {
+        val dir = tabStateDir() ?: return
+        val baseFile = java.io.File(dir, "base-branch")
+        val authorFile = java.io.File(dir, "author")
+        if (baseFile.exists()) savedBaseBranch = baseFile.readText().trim().takeIf { it.isNotBlank() }
+        if (authorFile.exists()) savedAuthor = authorFile.readText().trim().takeIf { it.isNotBlank() }
+    }
+
+    private fun saveTabState() {
+        val dir = tabStateDir() ?: return
+        dir.mkdirs()
+        val base = baseBranchCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
+        val baseFile = java.io.File(dir, "base-branch")
+        if (base != null) baseFile.writeText(base) else baseFile.delete()
+
+        val author = authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
+        val authorFile = java.io.File(dir, "author")
+        if (author != null) authorFile.writeText(author) else authorFile.delete()
     }
 
     private fun buildUi() {
@@ -207,6 +247,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         branches.forEach { baseBranchCombo.addItem(it) }
         val cfg = DevConfig.load()
         val preferred = previousSelection?.takeIf { it != "— none —" && branches.contains(it) }
+            ?: savedBaseBranch?.takeIf { branches.contains(it) }
             ?: cfg.git.base_branch.takeIf { branches.contains(it) }
         val idx = if (preferred != null) (0 until baseBranchCombo.itemCount)
             .firstOrNull { baseBranchCombo.getItemAt(it) == preferred } else null
@@ -253,8 +294,8 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         val currentUser = ghUser ?: PrService.currentGhUser().also { ghUser = it }
         authors.sortedWith(compareByDescending { it.login == currentUser })
             .forEach { authorCombo.addItem(it.login) }
-        val idx =
-            (0 until authorCombo.itemCount).firstOrNull { authorCombo.getItemAt(it) == previousSelection }
+        val target = previousSelection?.takeIf { it != "— none —" } ?: savedAuthor
+        val idx = (0 until authorCombo.itemCount).firstOrNull { authorCombo.getItemAt(it) == target }
         authorCombo.selectedIndex = idx ?: 0
         authorCombo.addActionListener(authorListener)
     }
@@ -322,8 +363,63 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    /** Called when the base-branch or author combo changes: instant local preview, then reload. */
+    private fun onFilterChanged() {
+        saveTabState()
+        applyLocalFilterPreview()
+        refresh()
+    }
+
+    /**
+     * Renders an immediate, client-side-filtered view of the last full fetch using the
+     * *current* combo selections — gives instant feedback while the authoritative re-fetch
+     * for the new filter is still in flight. Falls back to doing nothing if we have no cache
+     * yet (e.g. the very first load), since [refresh] is about to populate one anyway.
+     */
+    private fun applyLocalFilterPreview() {
+        val repo = lastLoadedRepo ?: return
+        if (lastLoadedPrs.isEmpty()) return
+        val selectedBranch = baseBranchCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
+        val selectedAuthor = authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
+        val filtered = lastLoadedPrs.filter { pr ->
+            (selectedBranch == null || pr.baseRefName == selectedBranch) &&
+                (selectedAuthor == null || pr.author == selectedAuthor)
+        }
+        renderPrList(filtered, repo, selectedBranch)
+    }
+
+    private fun renderPrList(prs: List<PullRequest>, repo: String, selectedBranch: String?) {
+        cardsPanel.removeAll()
+        if (prs.isEmpty()) {
+            cardsPanel.add(JBLabel("No open PRs found").apply {
+                border = JBUI.Borders.empty(16, 4)
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            })
+        } else {
+            val awaitingCount = prs.count { it.reviewState == ReviewState.AWAITING }
+            cardsPanel.add(
+                JBLabel(
+                    buildSummaryText(
+                        selectedBranch,
+                        prs.size,
+                        awaitingCount
+                    )
+                ).apply {
+                    border = JBUI.Borders.emptyBottom(6)
+                    font = font.deriveFont(font.size - 1f)
+                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                })
+            prs.forEach { pr ->
+                cardsPanel.add(buildPrCard(pr, repo)); cardsPanel.add(
+                Box.createVerticalStrut(6)
+            )
+            }
+        }
+        cardsPanel.revalidate(); cardsPanel.repaint()
+    }
+
     fun refresh() {
-        setStatus("Loading…")
+        onLoadingChanged(true)
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 if (upstreamRepo == null) upstreamRepo = PrService.upstreamRepo(project)
@@ -331,6 +427,7 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 val repo = upstreamRepo
                 if (repo == null) {
                     SwingUtilities.invokeLater {
+                        onLoadingChanged(false)
                         setStatus("No upstream remote found"); cardsPanel.removeAll()
                         cardsPanel.revalidate(); cardsPanel.repaint()
                         showError("Could not determine upstream repo.\nMake sure you have an 'upstream' git remote.")
@@ -345,36 +442,15 @@ class PrPanel(private val project: Project) : JPanel(BorderLayout()) {
                 val mergeableMap = PrService.fetchMergeableStates(repo, prs.map { it.number })
                 prs.forEach { it.mergeable = mergeableMap[it.number] ?: MergeableState.UNKNOWN }
                 SwingUtilities.invokeLater {
-                    cardsPanel.removeAll()
-                    if (prs.isEmpty()) {
-                        cardsPanel.add(JBLabel("No open PRs found").apply {
-                            border = JBUI.Borders.empty(16, 4)
-                            foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                        })
-                    } else {
-                        val awaitingCount = prs.count { it.reviewState == ReviewState.AWAITING }
-                        cardsPanel.add(
-                            JBLabel(
-                                buildSummaryText(
-                                    selectedBranch,
-                                    prs.size,
-                                    awaitingCount
-                                )
-                            ).apply {
-                                border = JBUI.Borders.emptyBottom(6)
-                                font = font.deriveFont(font.size - 1f)
-                                foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                            })
-                        prs.forEach { pr ->
-                            cardsPanel.add(buildPrCard(pr, repo)); cardsPanel.add(
-                            Box.createVerticalStrut(6)
-                        )
-                        }
-                    }
-                    cardsPanel.revalidate(); cardsPanel.repaint(); setStatus("")
+                    lastLoadedPrs = prs
+                    lastLoadedRepo = repo
+                    renderPrList(prs, repo, selectedBranch)
+                    setStatus("")
+                    onLoadingChanged(false)
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
+                    onLoadingChanged(false)
                     setStatus("Error: ${e.message?.take(60)}"); cardsPanel.removeAll()
                     cardsPanel.revalidate(); cardsPanel.repaint(); showError(
                     e.message ?: "Unknown error"
