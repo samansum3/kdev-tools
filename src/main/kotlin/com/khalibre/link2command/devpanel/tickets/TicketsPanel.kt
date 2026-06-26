@@ -29,10 +29,8 @@ class TicketsPanel(
     private val fixVersionField = JBTextField().apply { toolTipText = "e.g. 13073" }
 
     // owner badges (mutually exclusive)
-    private val badgeMyTasks =
-        makeBadge("My Tasks", false).also { it.putClientProperty("group", "owner") }
-    private val badgeUnassigned =
-        makeBadge("Unassigned", false).also { it.putClientProperty("group", "owner") }
+    private val badgeMyTasks = makeBadge("My Tasks", false)
+    private val badgeUnassigned = makeBadge("Unassigned", false)
     private val badgeHideDone = makeBadge("Hide Done", false)
 
     // Dynamic badges — rebuilt when meta is loaded
@@ -1232,14 +1230,6 @@ class TicketsPanel(
         statusLabel.text = text
     }
 
-    // ── Group badge deactivation ──────────────────────────────────────────────
-
-    fun deactivateGroupExcept(group: String, except: JLabel) {
-        listOf(badgeMyTasks, badgeUnassigned)
-            .filter { it != except && it.getClientProperty("group") == group }
-            .forEach { it.putClientProperty("active", false); applyBadgeStyle(it); it.repaint() }
-    }
-
     // ── Badge factory ─────────────────────────────────────────────────────────
 
     companion object {
@@ -1259,16 +1249,6 @@ class TicketsPanel(
                     label.putClientProperty("active", nowActive)
                     applyBadgeStyle(label); label.repaint()
 
-                    val group = label.getClientProperty("group") as? String
-                    if (nowActive && group != null) {
-                        var p = label.parent
-                        while (p != null) {
-                            if (p is TicketsPanel) {
-                                p.deactivateGroupExcept(group, label); break
-                            }
-                            p = p.parent
-                        }
-                    }
                     var p = label.parent
                     while (p != null) {
                         if (p is TicketsPanel) {

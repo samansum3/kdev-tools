@@ -55,9 +55,14 @@ object JiraService {
         if (scopeParts.isNotEmpty())
             clauses += if (scopeParts.size == 1) scopeParts[0] else "(${scopeParts.joinToString(" OR ")})"
 
-        // Owner filter
-        if (filters.myTasks) clauses += "assignee = currentUser()"
-        if (filters.unassigned) clauses += "assignee is EMPTY"
+        // Owner filter — "My Tasks" and "Unassigned" are independent toggles, OR'd together
+        // when both are on (an AND here would always be a contradiction: a ticket can't be
+        // both assigned to me and unassigned at once).
+        val ownerParts = mutableListOf<String>()
+        if (filters.myTasks) ownerParts += "assignee = currentUser()"
+        if (filters.unassigned) ownerParts += "assignee is EMPTY"
+        if (ownerParts.isNotEmpty())
+            clauses += if (ownerParts.size == 1) ownerParts[0] else "(${ownerParts.joinToString(" OR ")})"
 
         // Status filter
         when {
