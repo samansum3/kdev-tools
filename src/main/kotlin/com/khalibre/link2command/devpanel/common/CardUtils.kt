@@ -108,8 +108,13 @@ object CardUtils {
         return btn
     }
 
-    // Per-group selection state — key is a group tag (e.g. "tickets", "pr"), value is the selected card key
-    private val selectedCards = mutableMapOf<String, JPanel?>()
+    // Per-group selection state — key is a group tag (e.g. "tickets", "pr"), value is the selected card key.
+    // Deliberately NOT tracking a "previously selected instance" reference here: cards get fully
+    // rebuilt on every reload, so a stored instance can go stale (pointing at a card that's no
+    // longer on screen) the moment a *second* rebuild happens after the first one already
+    // re-pointed it. That stale-reference chain was leaving an old card stuck with the selected
+    // border alongside the newly-clicked one. Deriving the border live, by key, from whichever
+    // cards are actually mounted at click time sidesteps that entirely.
     private val selectedKeys = mutableMapOf<String, String?>()
 
     fun makeCard(ticketKey: String? = null, group: String = "default"): JPanel {
@@ -126,25 +131,29 @@ object CardUtils {
         return JPanel(GridBagLayout()).apply {
             putClientProperty("ticketKey", ticketKey)
             putClientProperty("group", group)
-            border =
-                if (ticketKey != null && ticketKey == selectedKeys[group]) selectedBorder else normalBorder
+            border = if (ticketKey != null && ticketKey == selectedKeys[group]) selectedBorder else normalBorder
             alignmentX = Component.LEFT_ALIGNMENT
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             addMouseListener(object : MouseAdapter() {
                 override fun mousePressed(e: MouseEvent) {
                     val g = getClientProperty("group") as? String ?: "default"
-                    // Deselect previously selected card in same group
-                    selectedCards[g]?.let { prev ->
-                        if (prev !== this@apply) {
-                            prev.border = normalBorder
-                            prev.repaint()
-                        }
+                    val newKey = getClientProperty("ticketKey") as? String
+                    if (selectedKeys[g] == newKey) return // already the selected card, nothing to do
+                    selectedKeys[g] = newKey
+
+                    // Re-derive *every* currently-mounted sibling card's border from the live
+                    // selection key, rather than touching only a single stored "previous" card.
+                    // This is what actually guarantees exactly one selected card at a time,
+                    // regardless of how many rebuilds happened since the last click.
+                    val container = parent ?: return
+                    for (i in 0 until container.componentCount) {
+                        val sibling = container.getComponent(i) as? JPanel ?: continue
+                        if (sibling.getClientProperty("group") as? String != g) continue
+                        val siblingKey = sibling.getClientProperty("ticketKey") as? String
+                        val shouldBeSelected = siblingKey != null && siblingKey == newKey
+                        sibling.border = if (shouldBeSelected) selectedBorder else normalBorder
+                        sibling.repaint()
                     }
-                    // Select this card
-                    selectedCards[g] = this@apply
-                    selectedKeys[g] = getClientProperty("ticketKey") as? String
-                    border = selectedBorder
-                    repaint()
                 }
             })
         }

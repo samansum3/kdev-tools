@@ -32,8 +32,12 @@ class PrPanel(
 
     // Remembered (persisted to disk) base-branch/author selections for this tab, used as the
     // fallback default the first time each combo is populated in this session.
+    // hasSaved*Pref distinguishes "no file yet → use the configured default" from
+    // "a file exists and explicitly says none was selected → respect that, no default".
     private var savedBaseBranch: String? = null
+    private var hasSavedBaseBranchPref = false
     private var savedAuthor: String? = null
+    private var hasSavedAuthorPref = false
 
     // The most recent full fetch (server-filtered by whatever base/author was selected at the
     // time). Used to render an instant, locally-filtered preview the moment the user changes
@@ -63,8 +67,17 @@ class PrPanel(
         border = JBUI.Borders.empty(8, 10)
         loadTabStateFromDisk()
         buildUi()
-        loadUpstreamBranches()
-        loadAuthors()
+        // Both base-branch and author combos are populated asynchronously (they need a pooled-
+        // thread fetch first). Don't fire the initial PR fetch until both are done and the
+        // remembered selections have actually been applied — otherwise the first refresh() runs
+        // against whatever the combos default to ("— none —"), not the restored filter.
+        var pending = 2
+        val onComboReady: () -> Unit = {
+            pending--
+            if (pending == 0) refresh()
+        }
+        loadUpstreamBranches(onComboReady)
+        loadAuthors(onComboReady)
     }
 
     private fun tabStateDir(): java.io.File? =
@@ -75,20 +88,32 @@ class PrPanel(
         val dir = tabStateDir() ?: return
         val baseFile = java.io.File(dir, "base-branch")
         val authorFile = java.io.File(dir, "author")
-        if (baseFile.exists()) savedBaseBranch = baseFile.readText().trim().takeIf { it.isNotBlank() }
-        if (authorFile.exists()) savedAuthor = authorFile.readText().trim().takeIf { it.isNotBlank() }
+        if (baseFile.exists()) {
+            hasSavedBaseBranchPref = true
+            savedBaseBranch = baseFile.readText().trim().takeIf { it.isNotBlank() }
+        }
+        if (authorFile.exists()) {
+            hasSavedAuthorPref = true
+            savedAuthor = authorFile.readText().trim().takeIf { it.isNotBlank() }
+        }
     }
 
+    /**
+     * Always writes both files (even when the selection is "— none —") so a deliberate "none"
+     * choice is recorded as such, rather than looking identical to "never picked anything yet"
+     * — which would otherwise make a fresh IDE session fall back to the configured default
+     * branch instead of respecting the explicit "none" the person chose last time.
+     */
     private fun saveTabState() {
         val dir = tabStateDir() ?: return
         dir.mkdirs()
         val base = baseBranchCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
-        val baseFile = java.io.File(dir, "base-branch")
-        if (base != null) baseFile.writeText(base) else baseFile.delete()
+        java.io.File(dir, "base-branch").writeText(base ?: "")
+        hasSavedBaseBranchPref = true; savedBaseBranch = base
 
         val author = authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
-        val authorFile = java.io.File(dir, "author")
-        if (author != null) authorFile.writeText(author) else authorFile.delete()
+        java.io.File(dir, "author").writeText(author ?: "")
+        hasSavedAuthorPref = true; savedAuthor = author
     }
 
     private fun buildUi() {
@@ -247,8 +272,8 @@ class PrPanel(
         branches.forEach { baseBranchCombo.addItem(it) }
         val cfg = DevConfig.load()
         val preferred = previousSelection?.takeIf { it != "— none —" && branches.contains(it) }
-            ?: savedBaseBranch?.takeIf { branches.contains(it) }
-            ?: cfg.git.base_branch.takeIf { branches.contains(it) }
+            ?: if (hasSavedBaseBranchPref) savedBaseBranch?.takeIf { branches.contains(it) }
+            else cfg.git.base_branch.takeIf { branches.contains(it) }
         val idx = if (preferred != null) (0 until baseBranchCombo.itemCount)
             .firstOrNull { baseBranchCombo.getItemAt(it) == preferred } else null
         baseBranchCombo.selectedIndex = idx ?: 0
@@ -256,15 +281,18 @@ class PrPanel(
         baseBranchCombo.addActionListener(baseBranchListener)
     }
 
-    private fun loadAuthors() {
+    private fun loadAuthors(callback: (() -> Unit)? = null) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val repo =
-                upstreamRepo ?: PrService.upstreamRepo(project) ?: return@executeOnPooledThread
+            val repo = upstreamRepo ?: PrService.upstreamRepo(project)
+            if (repo == null) {
+                SwingUtilities.invokeLater { callback?.invoke() }
+                return@executeOnPooledThread
+            }
             upstreamRepo = repo
             val cached = AuthorCache.load(repo)
             val authors = if (cached.isNotEmpty()) cached
             else GitService.fetchPrAuthors(repo).also { AuthorCache.save(repo, it) }
-            SwingUtilities.invokeLater { populateAuthorCombo(authors) }
+            SwingUtilities.invokeLater { populateAuthorCombo(authors); callback?.invoke() }
         }
     }
 

@@ -288,6 +288,22 @@ class TicketsPanel(
         notTypeBadges.zip(visibleTypeInfos).forEach { (b, i) -> restore(b, "notType_${i.name}") }
     }
 
+    private fun currentFilterStateMap(): MutableMap<String, Boolean> {
+        fun active(b: JLabel) = b.getClientProperty("active") == true
+        val map = mutableMapOf(
+            "myTasks" to active(badgeMyTasks),
+            "unassigned" to active(badgeUnassigned),
+            "hideDone" to active(badgeHideDone)
+        )
+        statusBadges.zip(visibleStatuses).forEach { (b, n) -> map["status_$n"] = active(b) }
+        notStatusBadges.zip(visibleStatuses).forEach { (b, n) -> map["notStatus_$n"] = active(b) }
+        typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> map["type_${i.name}"] = active(b) }
+        notTypeBadges.zip(visibleTypeInfos)
+            .forEach { (b, i) -> map["notType_${i.name}"] = active(b) }
+        map["filtersExpanded"] = filtersExpanded
+        return map
+    }
+
     private fun saveToGitCw() {
         val dir = tabStateDir() ?: return
         dir.mkdirs()
@@ -310,18 +326,7 @@ class TicketsPanel(
         if (search.isNotBlank()) File(dir, "search").writeText(search)
         else File(dir, "search").delete()
 
-        fun active(b: JLabel) = b.getClientProperty("active") == true
-        val map = mutableMapOf(
-            "myTasks" to active(badgeMyTasks),
-            "unassigned" to active(badgeUnassigned),
-            "hideDone" to active(badgeHideDone)
-        )
-        statusBadges.zip(visibleStatuses).forEach { (b, n) -> map["status_$n"] = active(b) }
-        notStatusBadges.zip(visibleStatuses).forEach { (b, n) -> map["notStatus_$n"] = active(b) }
-        typeBadges.zip(visibleTypeInfos).forEach { (b, i) -> map["type_${i.name}"] = active(b) }
-        notTypeBadges.zip(visibleTypeInfos)
-            .forEach { (b, i) -> map["notType_${i.name}"] = active(b) }
-        map["filtersExpanded"] = filtersExpanded
+        val map = currentFilterStateMap()
         try {
             File(dir, "filters.json").writeText(Gson().toJson(map))
         } catch (_: Exception) {
@@ -468,6 +473,7 @@ class TicketsPanel(
         filtersExpanded = !filtersExpanded
         filtersBody.isVisible = filtersExpanded
         filterToggleLabel.text = filterHeaderText()
+        pendingFilterState = currentFilterStateMap()
         saveToGitCw()
         filtersBody.revalidate(); parent?.revalidate(); parent?.repaint()
     }
@@ -486,8 +492,18 @@ class TicketsPanel(
             badgeHideDone
         ) + statusBadges + notStatusBadges + typeBadges + notTypeBadges
 
+    /**
+     * [pendingFilterState] used to only ever be populated once, from disk, at construction time.
+     * That meant any badge the person toggled *after* that point lived only on the live JLabel's
+     * "active" client property — which gets thrown away and rebuilt from scratch every time this
+     * tab is detached and reattached (e.g. switching to another sub-tab and back triggers
+     * [removeNotify]/[addNotify] → [syncFromMetaCacheIfLoaded] → [rebuildDynamicBadges], which
+     * makes brand-new badge labels). Keeping this map continuously in sync with the live badges
+     * on every toggle is what lets [applyPendingFilterState] correctly restore them afterwards.
+     */
     fun onFilterBadgeChanged() {
         filterToggleLabel.text = filterHeaderText()
+        pendingFilterState = currentFilterStateMap()
     }
 
     // ── Refresh / data loading ────────────────────────────────────────────────

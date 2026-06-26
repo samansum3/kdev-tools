@@ -123,12 +123,16 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
 
     private fun showTab(tabId: String) {
+        val isNewPanel = tabId !in panels
         val panel = panelFor(tabId)
         contentHolder.removeAll()
         contentHolder.add(panel, BorderLayout.CENTER)
         contentHolder.revalidate()
         contentHolder.repaint()
-        panel.refresh()
+        // A freshly created PrPanel triggers its own initial fetch once its base-branch/author
+        // combos finish restoring (see PrPanel.init) — calling refresh() here too would race
+        // ahead of that restore and fetch with the wrong (default "— none —") filter.
+        if (!isNewPanel) panel.refresh()
     }
 
     private fun selectTab(tabId: String) {
