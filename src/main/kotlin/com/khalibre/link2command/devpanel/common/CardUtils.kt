@@ -1,9 +1,14 @@
 package com.khalibre.link2command.devpanel.common
 
+import com.intellij.openapi.ui.MessageType
+import com.intellij.openapi.ui.popup.Balloon
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.ui.awt.RelativePoint
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.pr.PrService
 import com.khalibre.link2command.devpanel.tickets.JiraAuth
 import java.awt.*
+import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
@@ -11,6 +16,7 @@ import java.net.HttpURLConnection
 import javax.imageio.ImageIO
 import javax.swing.ImageIcon
 import javax.swing.JButton
+import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.border.CompoundBorder
 
@@ -19,6 +25,25 @@ object CardUtils {
     private val ARROW_LEFT_PADDING =
         JBUI.scale(8)     // left edge -> arrow, bit more breathing room
     private val ARROW_BADGE_GAP = JBUI.scale(4)        // arrow -> badge
+
+    /**
+     * Copies [text] to the system clipboard and confirms it with a small balloon that pops up
+     * right at [anchorPoint] (in [anchor]'s own coordinate space) and fades out on its own after
+     * about a second — used for "click a ticket key to copy it" and the "Copy link" button.
+     */
+    fun copyToClipboardWithBalloon(text: String, anchor: Component, anchorPoint: Point, message: String) {
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+        JBPopupFactory.getInstance()
+            .createHtmlTextBalloonBuilder(message, MessageType.INFO, null)
+            .setFadeoutTime(1000)
+            .createBalloon()
+            .show(RelativePoint(anchor, anchorPoint), Balloon.Position.above)
+    }
+
+    /** Convenience overload that anchors the balloon at [anchor]'s own top-center. */
+    fun copyToClipboardWithBalloon(text: String, anchor: JComponent, message: String) {
+        copyToClipboardWithBalloon(text, anchor, Point(anchor.width / 2, 0), message)
+    }
 
     fun makeActionButton(text: String, action: () -> Unit): JButton {
         return JButton(text).apply {
@@ -53,7 +78,7 @@ object CardUtils {
         val arrowWidth = Toolkit.getDefaultToolkit()
             .getFontMetrics(baseFont).stringWidth("→") // rough pre-measure; refined below
 
-        val btn = object : JButton(targetStatus) {
+        val btn = object : JButton("$targetStatus ") {
             override fun paintComponent(g: Graphics) {
                 val g2 = g.create() as Graphics2D
                 g2.setRenderingHint(
@@ -99,9 +124,7 @@ object CardUtils {
         // Reserve left space for [padding][arrow][gap], right side just normal padding.
         val fm = btn.getFontMetrics(btn.font)
         val leftSpace = ARROW_LEFT_PADDING + fm.stringWidth("→") + ARROW_BADGE_GAP
-        btn.margin = JBUI.insets(2, leftSpace, 2, BUTTON_H_PADDING + 4)
-        val pref = btn.preferredSize
-        btn.preferredSize = Dimension(pref.width + 4, pref.height)
+        btn.margin = JBUI.insets(2, leftSpace, 2, BUTTON_H_PADDING)
 
         if (tooltip != null) btn.toolTipText = tooltip
         btn.addActionListener { action() }

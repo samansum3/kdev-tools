@@ -3,6 +3,8 @@ package com.khalibre.link2command.devpanel.tickets
 import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.JBPopup
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -88,6 +90,7 @@ class TicketsPanel(
     // typeName → list of pending callbacks (supports multiple badges per type)
     private val typeIconCallbacks = mutableMapOf<String, MutableList<(ImageIcon) -> Unit>>()
     private val typeIconMemCache = mutableMapOf<String, ImageIcon>()   // typeName → resolved icon
+
     // priorityName → list of pending callbacks / resolved icon — same disk+mem caching algorithm
     // as type icons, keyed by priority name instead of type name.
     private val priorityIconCallbacks = mutableMapOf<String, MutableList<(ImageIcon) -> Unit>>()
@@ -660,6 +663,15 @@ class TicketsPanel(
             add(JBLabel(ticket.key).apply {
                 font = Font(Font.MONOSPACED, Font.BOLD, font.size - 1)
                 foreground = Color(24, 95, 165)
+                toolTipText = "Click to copy ${ticket.key}"
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        CardUtils.copyToClipboardWithBalloon(
+                            ticket.key, e.component, e.point, "Copied ${ticket.key}"
+                        )
+                    }
+                })
             }, g)
             g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL
             g.insets = Insets(0, 0, 0, 0)
@@ -672,10 +684,12 @@ class TicketsPanel(
 
         // Row 1: status · type · priority · assignee
         val isMe = ticket.assigneeEmail != null && ticket.assigneeEmail == currentUserEmail
+        val compactMode = DevConfig.load().ticket.itemMode == "compact"
         val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
-        metaPanel.add(makeStatusBadge(ticket.status, ticket.statusColorName))
+        if (compactMode) metaPanel.add(buildStatusDropdownTrigger(ticket))
+        else metaPanel.add(makeStatusBadge(ticket.status, ticket.statusColorName))
         metaPanel.add(Box.createHorizontalStrut(6))
 
         ticket.issueType?.let { typeName ->
@@ -994,34 +1008,70 @@ class TicketsPanel(
             panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
         panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
 
-        val cacheKey = "${ticket.key}-${ticket.status}-${ticket.assigneeName}"
-        val cached = transitionsCache[cacheKey]
-        if (cached != null) {
-            renderTransitionButtons(panel, ticket, isMe, cached)
-        } else {
+        val compactMode = DevConfig.load().ticket.itemMode == "compact"
+        if (compactMode) {
+            // Compact mode moves transitions into the status-badge dropdown (see
+            // buildStatusDropdownTrigger) and frees up the room a row of transition buttons
+            // used to take — that space goes to this "Copy link" button instead.
+            lateinit var copyLinkBtn: JButton
+            copyLinkBtn = CardUtils.makeActionButton("Copy link") {
+                CardUtils.copyToClipboardWithBalloon(
+                    JiraService.ticketUrl(ticket.key), copyLinkBtn, "Link copied"
+                )
+            }
+            panel.add(copyLinkBtn)
+            return
+        }
+
+        val cacheKey = transitionsCacheKey(ticket)
+        ensureTransitionsLoaded(ticket, cacheKey, onLoading = {
             val loadingLabel = JBLabel("…").apply {
                 font = font.deriveFont(font.size - 1f)
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
                 border = JBUI.Borders.empty(0, 4)
             }
             panel.add(loadingLabel)
-            ApplicationManager.getApplication().executeOnPooledThread {
-                val transitions = JiraService.fetchAvailableTransitions(ticket.key)
-                transitionsCache[cacheKey] = transitions
-                SwingUtilities.invokeLater {
-                    panel.remove(loadingLabel)
-                    renderTransitionButtons(panel, ticket, isMe, transitions)
-                    panel.revalidate(); panel.repaint()
-                    // Trigger height sync up the hierarchy
-                    var p: Container? = panel.parent
-                    while (p != null) {
-                        if (p is JPanel && p.layout is GridBagLayout) {
-                            syncCardHeight(p); break
-                        }
-                        p = p.parent
-                    }
+            loadingLabel
+        }) { transitions, loadingLabel ->
+            loadingLabel?.let { panel.remove(it) }
+            renderTransitionButtons(panel, ticket, isMe, transitions)
+            panel.revalidate(); panel.repaint()
+            // Trigger height sync up the hierarchy
+            var p: Container? = panel.parent
+            while (p != null) {
+                if (p is JPanel && p.layout is GridBagLayout) {
+                    syncCardHeight(p); break
                 }
+                p = p.parent
             }
+        }
+    }
+
+    private fun transitionsCacheKey(ticket: JiraTicket) =
+        "${ticket.key}-${ticket.status}-${ticket.assigneeName}"
+
+    /**
+     * Cache-or-fetch helper for a ticket's available transitions, shared by the default mode's
+     * inline transition buttons and compact mode's status-badge dropdown. [onLoading] is only
+     * invoked (synchronously, on the EDT) when a network fetch is actually needed, and should
+     * return whatever placeholder it added so [onReady] can clean it up; pass `null` from
+     * [onLoading] if there's nothing to clean up.
+     */
+    private fun <T> ensureTransitionsLoaded(
+        ticket: JiraTicket,
+        cacheKey: String,
+        onLoading: () -> T,
+        onReady: (transitions: List<Pair<String, String>>, placeholder: T?) -> Unit
+    ) {
+        val cached = transitionsCache[cacheKey]
+        if (cached != null) {
+            onReady(cached, null); return
+        }
+        val placeholder = onLoading()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val transitions = JiraService.fetchAvailableTransitions(ticket.key)
+            transitionsCache[cacheKey] = transitions
+            SwingUtilities.invokeLater { onReady(transitions, placeholder) }
         }
     }
 
@@ -1041,6 +1091,137 @@ class TicketsPanel(
             transitionButtons += btn
             panel.add(btn)
         }
+    }
+
+    // ── Compact mode: status badge → transitions dropdown ──────────────────────
+
+    /**
+     * Compact mode's stand-in for the status badge: same look, plus a caret indicating it opens
+     * a dropdown of the ticket's available transitions (built from the exact same
+     * [CardUtils.makeTransitionButton] pieces used by default mode's inline buttons — just
+     * stacked vertically in a popup instead of laid out in a row).
+     */
+    private fun buildStatusDropdownTrigger(ticket: JiraTicket): JComponent {
+        var currentStatus = ticket.status
+        var transitions: List<Pair<String, String>>? = null
+        var enabled = true
+
+        val (initBg, initFg) = ticket.statusColorName?.let { jiraStatusColor(it) }
+            ?: legacyGuessColor(currentStatus)
+
+        val statusLabel = JLabel(currentStatus).apply {
+            isOpaque = true; background = initBg; foreground = initFg
+            font = font.deriveFont(font.size - 2f)
+            border = JBUI.Borders.empty(2, 6, 2, 2)
+        }
+        val caretLabel = JLabel("▾").apply {
+            isOpaque = true; background = initBg; foreground = initFg
+            font = font.deriveFont(font.size - 2f)
+            border = JBUI.Borders.empty(2, 2, 2, 6)
+        }
+        val trigger = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
+            add(statusLabel)
+            add(caretLabel)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = "Click to change status"
+        }
+
+        fun paintColors(bg: Color, fg: Color) {
+            statusLabel.background = bg; statusLabel.foreground = fg
+            caretLabel.background = bg; caretLabel.foreground = fg
+            statusLabel.repaint(); caretLabel.repaint()
+        }
+
+        fun setEnabledState(e: Boolean) {
+            enabled = e
+            trigger.cursor =
+                Cursor.getPredefinedCursor(if (e) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR)
+            caretLabel.text = if (e) "▾" else "…"
+        }
+
+        fun openDropdown() {
+            val t = transitions
+            if (!enabled || t == null || t.isEmpty()) return
+            showTransitionDropdown(trigger, t) { targetStatus ->
+                val originalStatus = currentStatus
+                val (originalBg, originalFg) = statusLabel.background to statusLabel.foreground
+
+                // Optimistic update: reflect the picked status immediately, and lock the
+                // dropdown until the request resolves.
+                currentStatus = targetStatus
+                statusLabel.text = targetStatus
+                val (newBg, newFg) = resolveStatusColors(targetStatus)
+                paintColors(newBg, newFg)
+                setEnabledState(false)
+
+                setStatus("${ticket.key} → $targetStatus…")
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    val result = if (targetStatus == "In Progress")
+                        JiraService.transitionToInProgress(ticket.key)
+                    else
+                        JiraService.transitionTicket(ticket.key, targetStatus)
+                    SwingUtilities.invokeLater {
+                        if (result.isSuccess) {
+                            // Card gets fully rebuilt with authoritative data (including a
+                            // freshly-fetched transitions list) — nothing left to reset here.
+                            setStatus("✓ ${ticket.key} → $targetStatus"); refresh()
+                        } else {
+                            setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                            currentStatus = originalStatus
+                            statusLabel.text = originalStatus
+                            paintColors(originalBg, originalFg)
+                            setEnabledState(true)
+                        }
+                    }
+                }
+            }
+        }
+
+        val clickHandler = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = openDropdown()
+        }
+        statusLabel.addMouseListener(clickHandler)
+        caretLabel.addMouseListener(clickHandler)
+        trigger.addMouseListener(clickHandler)
+
+        ensureTransitionsLoaded(ticket, transitionsCacheKey(ticket), onLoading = {
+            setEnabledState(false)
+        }) { result, _ ->
+            transitions = result
+            setEnabledState(true)
+        }
+
+        return trigger
+    }
+
+    /** Shows [transitions] as a vertical popup of transition-button-styled items below [anchor]. */
+    private fun showTransitionDropdown(
+        anchor: JComponent,
+        transitions: List<Pair<String, String>>,
+        onPicked: (targetStatus: String) -> Unit
+    ) {
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            border = JBUI.Borders.empty(4)
+        }
+        lateinit var popup: JBPopup
+        transitions.forEach { (targetStatus, transitionName) ->
+            val (bg, fg) = resolveStatusColors(targetStatus)
+            val item = CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
+                popup.cancel(); onPicked(targetStatus)
+            }
+            item.alignmentX = Component.LEFT_ALIGNMENT
+            content.add(item)
+        }
+        popup = JBPopupFactory.getInstance()
+            .createComponentPopupBuilder(content, null)
+            .setRequestFocus(false)
+            .setResizable(false)
+            .setShowBorder(false)
+            .createPopup()
+        popup.showUnderneathOf(anchor)
     }
 
     // ── Icon loading ──────────────────────────────────────────────────────────

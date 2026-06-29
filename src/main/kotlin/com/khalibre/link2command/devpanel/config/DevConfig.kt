@@ -26,12 +26,15 @@ data class JiraConfig(
  * [excludedTypes]       — issue types hidden from Tickets > type / not-type filter badges.
  * [developmentTypes]    — issue types eligible to show the "Pick" action button on a ticket card.
  *                         If empty, every type is eligible (keeps prior behaviour for unconfigured projects).
+ * [itemMode]            — "default" or "compact". Controls how a ticket card's status/transitions
+ *                         are rendered — see TicketsPanel's card-building code.
  */
 data class TicketConfig(
     val doneStatusesByType: Map<String, List<String>> = emptyMap(),
     val excludedStatuses: List<String> = emptyList(),
     val excludedTypes: List<String> = emptyList(),
-    val developmentTypes: List<String> = emptyList()
+    val developmentTypes: List<String> = emptyList(),
+    val itemMode: String = "compact"
 )
 
 data class DevConfig(

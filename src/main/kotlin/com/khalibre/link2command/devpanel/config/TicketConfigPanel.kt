@@ -50,6 +50,10 @@ class TicketConfigPanel(
     private var excludedTypeBadges: List<JLabel> = emptyList()
     private var developmentTypeBadges: List<JLabel> = emptyList()
 
+    // Ticket item mode — mutually exclusive Compact/Default toggle (Default selected initially)
+    private val itemModeCompactBadge = makeConfigBadge("Compact", false)
+    private val itemModeDefaultBadge = makeConfigBadge("Default", true)
+
     // Containers rebuilt when meta changes
     private val doneStatusesContainer =
         JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS); isOpaque = false }
@@ -74,7 +78,24 @@ class TicketConfigPanel(
     init {
         border = JBUI.Borders.empty(10, 12)
         buildUi()
+        wireItemModeExclusivity()
         loadMetaAndConfig()
+    }
+
+    /** Keeps exactly one of Compact/Default active — clicking one turns the other off. */
+    private fun wireItemModeExclusivity() {
+        fun select(chosen: JLabel, other: JLabel) {
+            chosen.putClientProperty("active", true)
+            other.putClientProperty("active", false)
+            TicketsPanel.applyBadgeStyle(chosen); TicketsPanel.applyBadgeStyle(other)
+            chosen.repaint(); other.repaint()
+        }
+        itemModeCompactBadge.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = select(itemModeCompactBadge, itemModeDefaultBadge)
+        })
+        itemModeDefaultBadge.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = select(itemModeDefaultBadge, itemModeCompactBadge)
+        })
     }
 
     // ── UI construction ───────────────────────────────────────────────────────
@@ -114,6 +135,23 @@ class TicketConfigPanel(
                 wrapPanel = developmentTypeWrap,
                 getBadges = { developmentTypeBadges }
             ).also { developmentTypeHeader = it })
+        form.add(Box.createVerticalStrut(20))
+
+        // ── Ticket item mode ─────────────────────────────────────────────────
+        form.add(sectionLabel("TICKET ITEM MODE"))
+        form.add(
+            JBLabel("<html><i>Compact hides transition buttons and moves transitions into a dropdown on the status badge.</i></html>").apply {
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 1f)
+                alignmentX = LEFT_ALIGNMENT
+                border = JBUI.Borders.empty(2, 0, 6, 0)
+            })
+        val itemModeRow = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
+            isOpaque = false; alignmentX = LEFT_ALIGNMENT
+        }
+        itemModeRow.add(itemModeDefaultBadge)
+        itemModeRow.add(itemModeCompactBadge)
+        form.add(itemModeRow)
         form.add(Box.createVerticalStrut(20))
 
         // ── ACTIONS ──────────────────────────────────────────────────────────
@@ -487,6 +525,12 @@ class TicketConfigPanel(
             badge.putClientProperty("active", info.name in devTypes)
             TicketsPanel.applyBadgeStyle(badge)
         }
+        // Ticket item mode
+        val isCompact = cfg.itemMode == "compact"
+        itemModeCompactBadge.putClientProperty("active", isCompact)
+        itemModeDefaultBadge.putClientProperty("active", !isCompact)
+        TicketsPanel.applyBadgeStyle(itemModeCompactBadge)
+        TicketsPanel.applyBadgeStyle(itemModeDefaultBadge)
         // Refresh all done-status header labels to show correct counts
         refreshAllDoneHeaders()
         // Refresh excluded section header counts
@@ -527,7 +571,8 @@ class TicketConfigPanel(
                     doneStatusesByType = doneByType,
                     excludedStatuses = excludedStatuses,
                     excludedTypes = excludedTypes,
-                    developmentTypes = developmentTypes
+                    developmentTypes = developmentTypes,
+                    itemMode = if (itemModeCompactBadge.getClientProperty("active") == true) "compact" else "default"
                 )
             )
         )

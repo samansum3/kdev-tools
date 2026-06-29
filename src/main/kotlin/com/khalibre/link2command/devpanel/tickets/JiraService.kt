@@ -160,7 +160,7 @@ object JiraService {
     private fun scopeJqlToKey(jql: String, ticketKey: String): String {
         val orderByIdx = jql.indexOf("ORDER BY")
         val clauses = if (orderByIdx >= 0) jql.substring(0, orderByIdx).trim() else jql.trim()
-        val orderBy = if (orderByIdx >= 0) jql.substring(orderByIdx) else "ORDER BY Rank ASC"
+        val orderBy = if (orderByIdx >= 0) jql.substring(orderByIdx) else "ORDER BY created ASC"
         val keyClause = "key = \"$ticketKey\""
         val combined = if (clauses.isBlank()) keyClause else "($clauses) AND $keyClause"
         return "$combined $orderBy"
@@ -246,10 +246,12 @@ object JiraService {
     fun transitionToDeployedUat(ticketKey: String) = transitionTicket(ticketKey, "Deployed to UAT")
     fun transitionToMerged(ticketKey: String) = transitionTicket(ticketKey, "Merged")
 
+    fun ticketUrl(ticketKey: String): String =
+        "${DevConfig.load().jira.base_url.trimEnd('/')}/browse/$ticketKey"
+
     fun openTicketInBrowser(ticketKey: String) {
-        val url = "${DevConfig.load().jira.base_url.trimEnd('/')}/browse/$ticketKey"
         try {
-            java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+            java.awt.Desktop.getDesktop().browse(java.net.URI(ticketUrl(ticketKey)))
         } catch (_: Exception) {
         }
     }
