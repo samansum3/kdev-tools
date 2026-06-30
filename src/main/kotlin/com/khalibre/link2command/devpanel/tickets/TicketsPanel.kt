@@ -780,7 +780,7 @@ class TicketsPanel(
 
             override fun getInsets(): Insets {
                 val hasAvatar = selectedItem is JiraUserService.JiraUser
-                return if (hasAvatar) Insets(0, 0, 0, 0) else Insets(1, 4, 1, 0)
+                return if (hasAvatar) Insets(0, 0, 0, 6) else Insets(1, 4, 1, 4)
             }
 
             override fun getInsets(insets: Insets): Insets {
@@ -795,7 +795,19 @@ class TicketsPanel(
                 val rendererComp =
                     r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
                 val content = rendererComp.preferredSize
-                return Dimension(content.width + ARROW_GUTTER, content.height)
+                val i = getInsets()
+                return Dimension(content.width + i.left + i.right, content.height + i.top + i.bottom)
+            }
+
+            override fun doLayout() {
+                super.doLayout()
+                // Zero out the arrow button AFTER the UI delegate's layout manager runs,
+                // so its stale bounds never shrink the renderer's display area.
+                for (comp in components) {
+                    if (comp is JButton) {
+                        comp.bounds = Rectangle(0, 0, 0, 0)
+                    }
+                }
             }
 
             override fun paintComponent(g: Graphics) {
@@ -806,7 +818,7 @@ class TicketsPanel(
                         RenderingHints.VALUE_ANTIALIAS_ON
                     )
                     g2.color = hoverBg
-                    val w = width.toDouble();
+                    val w = width.toDouble()
                     val h = height.toDouble()
                     val r = JBUI.scale(4).toDouble()
                     g2.fill(java.awt.geom.RoundRectangle2D.Double(0.0, 0.0, w, h, r, r))
@@ -822,6 +834,13 @@ class TicketsPanel(
         combo.border = JBUI.Borders.empty()
         combo.font = combo.font.deriveFont(combo.font.size - 2f)
         combo.putClientProperty("JComboBox.isBorderless", true)
+        combo.putClientProperty("JComboBox.isTableCellEditor", false)
+
+        for (comp in combo.components) {
+            if (comp is JButton) {
+                comp.isVisible = false
+            }
+        }
         combo.addMouseListener(object : MouseAdapter() {
             override fun mouseEntered(e: MouseEvent) {
                 combo.isHovered = true; combo.repaint()
@@ -868,14 +887,15 @@ class TicketsPanel(
                 isOpaque = index != -1 && isSelected
                 border = JBUI.Borders.empty(1, 0)
                 val user = value as? JiraUserService.JiraUser
+                val caret = if (index == -1) "  ▾" else ""
                 if (user == null) {
-                    text = "Unassigned"
+                    text = "Unassigned$caret"
                     icon = null
                     foreground =
                         if (isSelected) foreground else JBUI.CurrentTheme.Label.disabledForeground()
                     return this
                 }
-                text = user.displayName
+                text = "${user.displayName}$caret"
                 foreground = if (isSelected) foreground
                 else if (user.accountId == currentUserAccountId())
                     Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
@@ -1415,7 +1435,7 @@ class TicketsPanel(
 
     companion object {
         private val ARROW_GUTTER =
-            JBUI.scale(26) // room for the caret under the borderless combo UI
+            JBUI.scale(4) // room for the caret under the borderless combo UI
 
         fun makeBadge(text: String, initiallyActive: Boolean): JLabel {
             val label = JLabel(text)
