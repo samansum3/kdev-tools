@@ -1207,10 +1207,9 @@ class TicketsPanel(
         })
 
         // Only the current status is known up front; transitions arrive async below.
-        val currentEntry = currentStatus to ""
         val model = DefaultComboBoxModel<Pair<String, String>>()
         combo.model = model
-        combo.selectedItem = currentEntry
+        combo.selectedItem = null
         combo.renderer = object : ListCellRenderer<Pair<String, String>> {
             override fun getListCellRendererComponent(
                 list: JList<out Pair<String, String>>,
@@ -1231,19 +1230,15 @@ class TicketsPanel(
                     }
                 }
 
-                if (index == 0) {
-                    return JPanel().apply {
-                        isVisible = false
-                    }
-                }
-
                 // Popup row: "→ [status badge]"
                 val badge = makeStatusBadge(status)
-                return JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                return JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                     isOpaque = isSelected
                     if (isSelected) background = list.selectionBackground
+                    border = JBUI.Borders.empty(2, 4)
                     add(JLabel("→").apply {
                         foreground = if (isSelected) list.selectionForeground else list.foreground
+                        border = JBUI.Borders.emptyRight(8)
                     })
                     add(badge)
                 }
@@ -1281,7 +1276,6 @@ class TicketsPanel(
             if (targetStatus == currentStatus) return@addActionListener
 
             val originalStatus = currentStatus
-            val originalEntry = originalStatus to ""
 
             // Optimistic update: reflect the picked status immediately, and lock the
             // dropdown until the request resolves.
@@ -1299,11 +1293,12 @@ class TicketsPanel(
                         // Card gets fully rebuilt with authoritative data (including a
                         // freshly-fetched transitions list) — nothing left to reset here.
 //                        setStatus("✓ ${ticket.key} → $targetStatus"); refresh()
+                        refresh()
                         setEnabledState(true)
                     } else {
                         setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
                         setCurrentStatus(originalStatus)
-                        combo.selectedItem = originalEntry
+                        combo.selectedItem = null
                         setEnabledState(true)
                     }
                 }
@@ -1315,10 +1310,10 @@ class TicketsPanel(
             setEnabledState(false)
         }) { result, _ ->
             val newModel = DefaultComboBoxModel<Pair<String, String>>()
-            newModel.addElement(currentEntry)
+//            newModel.addElement(currentEntry)
             result?.forEach { pair -> if (pair.first != currentStatus) newModel.addElement(pair) }
             combo.model = newModel
-            combo.selectedItem = currentEntry
+            combo.selectedItem = null
             setEnabledState(true)
         }
 
@@ -1515,9 +1510,6 @@ class TicketsPanel(
     // ── Badge factory ─────────────────────────────────────────────────────────
 
     companion object {
-        private val ARROW_GUTTER =
-            JBUI.scale(4) // room for the caret under the borderless combo UI
-
         fun makeBadge(text: String, initiallyActive: Boolean): JLabel {
             val label = JLabel(text)
             label.font = label.font.deriveFont(label.font.size - 2f)
