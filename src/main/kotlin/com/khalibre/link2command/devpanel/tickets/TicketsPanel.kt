@@ -3,8 +3,6 @@ package com.khalibre.link2command.devpanel.tickets
 import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.JBPopup
-import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -1123,125 +1121,188 @@ class TicketsPanel(
      */
     private fun buildStatusDropdownTrigger(ticket: JiraTicket): JComponent {
         var currentStatus = ticket.status
-        var transitions: List<Pair<String, String>>? = null
-        var enabled = true
+        val colorName = statusColorByName[currentStatus]
+        val (bg, fg) = colorName?.let { jiraStatusColor(it) } ?: legacyGuessColor(currentStatus)
 
-        val (initBg, initFg) = ticket.statusColorName?.let { jiraStatusColor(it) }
-            ?: legacyGuessColor(currentStatus)
+        val combo = object : com.intellij.openapi.ui.ComboBox<Pair<String, String>>() {
+            var isHovered = false
 
-        val statusLabel = JLabel(currentStatus).apply {
-            isOpaque = true; background = initBg; foreground = initFg
-            font = font.deriveFont(font.size - 2f)
-            border = JBUI.Borders.empty(2, 6, 2, 2)
-        }
-        val caretLabel = JLabel("▾").apply {
-            isOpaque = true; background = initBg; foreground = initFg
-            font = font.deriveFont(font.size - 2f)
-            border = JBUI.Borders.empty(2, 2, 2, 6)
-        }
-        val trigger = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            isOpaque = false
-            add(statusLabel)
-            add(caretLabel)
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Click to change status"
-        }
+            override fun getForeground(): Color = fg
 
-        fun paintColors(bg: Color, fg: Color) {
-            statusLabel.background = bg; statusLabel.foreground = fg
-            caretLabel.background = bg; caretLabel.foreground = fg
-            statusLabel.repaint(); caretLabel.repaint()
+            override fun getInsets(): Insets = Insets(0, 0, 0, 0)
+
+            override fun getInsets(insets: Insets): Insets {
+                val i = getInsets()
+                insets.set(i.top, i.left, i.bottom, i.right)
+                return insets
+            }
+
+            override fun getPreferredSize(): Dimension {
+                @Suppress("UNCHECKED_CAST")
+                val r = renderer as? ListCellRenderer<Any?> ?: return super.getPreferredSize()
+                val rendererComp =
+                    r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
+                val content = rendererComp.preferredSize
+                val i = getInsets()
+                return Dimension(content.width + i.left + i.right, content.height + i.top + i.bottom)
+            }
+
+            override fun doLayout() {
+                super.doLayout()
+                // Zero out the arrow button AFTER the UI delegate's layout manager runs,
+                // so its stale bounds never shrink the renderer's display area.
+                for (comp in components) {
+                    if (comp is JButton) {
+                        comp.bounds = Rectangle(0, 0, 0, 0)
+                    }
+                }
+            }
+
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                g2.setRenderingHint(
+                    RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON
+                )
+                if (isHovered) {
+                    g2.color = bg.darker()
+                } else {
+                    g2.color = bg
+                }
+                val w = width.toDouble()
+                val h = height.toDouble()
+                val r = JBUI.scale(4).toDouble()
+                g2.fill(java.awt.geom.RoundRectangle2D.Double(0.0, 0.0, w, h, r, r))
+                g2.dispose()
+                super.paintComponent(g)
+            }
+        }
+        combo.isEditable = false
+        combo.isOpaque = false
+        combo.foreground = fg
+        combo.background = Color(0, 0, 0, 0)
+        combo.border = JBUI.Borders.empty()
+        combo.font = combo.font.deriveFont(combo.font.size - 2f)
+        combo.putClientProperty("JComboBox.isBorderless", true)
+        combo.putClientProperty("JComboBox.isTableCellEditor", false)
+        combo.toolTipText = "Click to change status"
+
+        for (comp in combo.components) {
+            if (comp is JButton) {
+                comp.isVisible = false
+            }
+        }
+        combo.addMouseListener(object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                combo.isHovered = true
+                combo.repaint()
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                combo.isHovered = false
+                combo.repaint()
+            }
+        })
+
+        // Only the current status is known up front; transitions arrive async below.
+        val currentEntry = currentStatus to ""
+        val model = DefaultComboBoxModel<Pair<String, String>>()
+        combo.model = model
+        combo.selectedItem = currentEntry
+        combo.renderer = object : ListCellRenderer<Pair<String, String>> {
+            override fun getListCellRendererComponent(
+                list: JList<out Pair<String, String>>,
+                value: Pair<String, String>?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean
+            ): Component {
+                val status = value?.first ?: currentStatus
+
+                if (index == -1) {
+                    val caret = if (combo.isEnabled) "▾" else "…"
+                    return JLabel("$status  $caret").apply {
+                        isOpaque = false
+                        font = combo.font
+                        border = JBUI.Borders.empty(2, 6)
+                        background = Color(0, 0, 0, 0)
+                    }
+                }
+
+                if (index == 0) {
+                    return JPanel().apply {
+                        preferredSize = Dimension(0, 0)
+                        isOpaque = false
+                    }
+                }
+
+                // Popup row: "→ [status badge]"
+                val badge = makeStatusBadge(status)
+                return JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                    isOpaque = isSelected
+                    if (isSelected) background = list.selectionBackground
+                    add(JLabel("→").apply {
+                        foreground = if (isSelected) list.selectionForeground else list.foreground
+                    })
+                    add(badge)
+                }
+            }
         }
 
         fun setEnabledState(e: Boolean) {
-            enabled = e
-            trigger.cursor =
-                Cursor.getPredefinedCursor(if (e) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR)
-            caretLabel.text = if (e) "▾" else "…"
+            combo.isEnabled = e
+            combo.cursor = Cursor.getPredefinedCursor(if (e) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR)
+            combo.repaint()
         }
 
-        fun openDropdown() {
-            val t = transitions
-            if (!enabled || t == null || t.isEmpty()) return
-            showTransitionDropdown(trigger, t) { targetStatus ->
-                val originalStatus = currentStatus
-                val (originalBg, originalFg) = statusLabel.background to statusLabel.foreground
+        combo.addActionListener {
+            val selected = combo.selectedItem as? Pair<String, String> ?: return@addActionListener
+            val targetStatus = selected.first
+            if (targetStatus == currentStatus) return@addActionListener
 
-                // Optimistic update: reflect the picked status immediately, and lock the
-                // dropdown until the request resolves.
-                currentStatus = targetStatus
-                statusLabel.text = targetStatus
-                val (newBg, newFg) = resolveStatusColors(targetStatus)
-                paintColors(newBg, newFg)
-                setEnabledState(false)
+            val originalStatus = currentStatus
+            val originalEntry = originalStatus to ""
 
-                setStatus("${ticket.key} → $targetStatus…")
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    val result = if (targetStatus == "In Progress")
-                        JiraService.transitionToInProgress(ticket.key)
-                    else
-                        JiraService.transitionTicket(ticket.key, targetStatus)
-                    SwingUtilities.invokeLater {
-                        if (result.isSuccess) {
-                            // Card gets fully rebuilt with authoritative data (including a
-                            // freshly-fetched transitions list) — nothing left to reset here.
-                            setStatus("✓ ${ticket.key} → $targetStatus"); refresh()
-                        } else {
-                            setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-                            currentStatus = originalStatus
-                            statusLabel.text = originalStatus
-                            paintColors(originalBg, originalFg)
-                            setEnabledState(true)
-                        }
+            // Optimistic update: reflect the picked status immediately, and lock the
+            // dropdown until the request resolves.
+            currentStatus = targetStatus
+            setEnabledState(false)
+
+//            setStatus("${ticket.key} → $targetStatus…")
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val result = if (targetStatus == "In Progress")
+                    JiraService.transitionToInProgress(ticket.key)
+                else
+                    JiraService.transitionTicket(ticket.key, targetStatus)
+                SwingUtilities.invokeLater {
+                    if (result.isSuccess) {
+                        // Card gets fully rebuilt with authoritative data (including a
+                        // freshly-fetched transitions list) — nothing left to reset here.
+//                        setStatus("✓ ${ticket.key} → $targetStatus"); refresh()
+                        setEnabledState(true)
+                    } else {
+                        setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                        currentStatus = originalStatus
+                        combo.selectedItem = originalEntry
+                        setEnabledState(true)
                     }
                 }
             }
         }
 
-        val clickHandler = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = openDropdown()
-        }
-        statusLabel.addMouseListener(clickHandler)
-        caretLabel.addMouseListener(clickHandler)
-        trigger.addMouseListener(clickHandler)
-
+        setEnabledState(false)
         ensureTransitionsLoaded(ticket, transitionsCacheKey(ticket), onLoading = {
             setEnabledState(false)
         }) { result, _ ->
-            transitions = result
+            val newModel = DefaultComboBoxModel<Pair<String, String>>()
+            newModel.addElement(currentEntry)
+            result?.forEach { pair -> if (pair.first != currentStatus) newModel.addElement(pair) }
+            combo.model = newModel
+            combo.selectedItem = currentEntry
             setEnabledState(true)
         }
 
-        return trigger
-    }
-
-    /** Shows [transitions] as a vertical popup of transition-button-styled items below [anchor]. */
-    private fun showTransitionDropdown(
-        anchor: JComponent,
-        transitions: List<Pair<String, String>>,
-        onPicked: (targetStatus: String) -> Unit
-    ) {
-        val content = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-            border = JBUI.Borders.empty(4)
-        }
-        lateinit var popup: JBPopup
-        transitions.forEach { (targetStatus, transitionName) ->
-            val (bg, fg) = resolveStatusColors(targetStatus)
-            val item = CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
-                popup.cancel(); onPicked(targetStatus)
-            }
-            item.alignmentX = Component.LEFT_ALIGNMENT
-            content.add(item)
-        }
-        popup = JBPopupFactory.getInstance()
-            .createComponentPopupBuilder(content, null)
-            .setRequestFocus(false)
-            .setResizable(false)
-            .setShowBorder(false)
-            .createPopup()
-        popup.showUnderneathOf(anchor)
+        return combo
     }
 
     // ── Icon loading ──────────────────────────────────────────────────────────
