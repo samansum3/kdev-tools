@@ -1126,6 +1126,7 @@ class TicketsPanel(
 
         val combo = object : com.intellij.openapi.ui.ComboBox<Pair<String, String>>() {
             var isHovered = false
+            var paintColor = bg
 
             override fun getForeground(): Color = fg
 
@@ -1165,9 +1166,9 @@ class TicketsPanel(
                     RenderingHints.VALUE_ANTIALIAS_ON
                 )
                 if (isHovered) {
-                    g2.color = bg.darker()
+                    g2.color = paintColor.darker()
                 } else {
-                    g2.color = bg
+                    g2.color = paintColor
                 }
                 val w = width.toDouble()
                 val h = height.toDouble()
@@ -1179,6 +1180,7 @@ class TicketsPanel(
         }
         combo.isEditable = false
         combo.isOpaque = false
+        combo.paintColor = bg
         combo.foreground = fg
         combo.background = Color(0, 0, 0, 0)
         combo.border = JBUI.Borders.empty()
@@ -1231,8 +1233,7 @@ class TicketsPanel(
 
                 if (index == 0) {
                     return JPanel().apply {
-                        preferredSize = Dimension(0, 0)
-                        isOpaque = false
+                        isVisible = false
                     }
                 }
 
@@ -1255,6 +1256,25 @@ class TicketsPanel(
             combo.repaint()
         }
 
+        fun rerenderComboToContent() {
+            combo.invalidate()   // mark this component's cached size as stale
+            combo.revalidate()   // walk up to the nearest validate root and schedule layout
+            combo.repaint()
+        }
+
+        fun updateComboBackground(status: String) {
+            val colorName = statusColorByName[status]
+            val (bg, fg) = colorName?.let { jiraStatusColor(it) } ?: legacyGuessColor(status)
+            combo.paintColor = bg
+            combo.foreground = fg
+        }
+
+        fun setCurrentStatus(status: String) {
+            currentStatus = status
+            updateComboBackground(status)
+            rerenderComboToContent()
+        }
+
         combo.addActionListener {
             val selected = combo.selectedItem as? Pair<String, String> ?: return@addActionListener
             val targetStatus = selected.first
@@ -1265,7 +1285,7 @@ class TicketsPanel(
 
             // Optimistic update: reflect the picked status immediately, and lock the
             // dropdown until the request resolves.
-            currentStatus = targetStatus
+            setCurrentStatus(targetStatus)
             setEnabledState(false)
 
 //            setStatus("${ticket.key} → $targetStatus…")
@@ -1282,7 +1302,7 @@ class TicketsPanel(
                         setEnabledState(true)
                     } else {
                         setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
-                        currentStatus = originalStatus
+                        setCurrentStatus(originalStatus)
                         combo.selectedItem = originalEntry
                         setEnabledState(true)
                     }
