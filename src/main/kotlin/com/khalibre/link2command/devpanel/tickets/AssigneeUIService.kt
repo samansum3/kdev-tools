@@ -175,21 +175,30 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
             }
         }
 
+        fun rerenderComboToContent() {
+            combo.invalidate()   // mark this component's cached size as stale
+            combo.revalidate()   // walk up to the nearest validate root and schedule layout
+            combo.repaint()
+        }
+
         combo.addActionListener {
             val selected = combo.selectedItem as? JiraUserService.JiraUser
             if (selected?.accountId == ticket.assigneeAccountId) return@addActionListener
             if (selected == null && ticket.assigneeAccountId == null) return@addActionListener
+            rerenderComboToContent()
             onAssigneeChanged(ticket, selected)
         }
 
         return combo
     }
 
-
     private fun currentUserAccountId(): String? =
         assignableUsers.firstOrNull { it.emailAddress == tkPanel.currentUserEmail }?.accountId
 
-    private fun onAssigneeChanged(ticket: JiraTicket, newAssignee: JiraUserService.JiraUser?) {
+    private fun onAssigneeChanged(
+        ticket: JiraTicket,
+        newAssignee: JiraUserService.JiraUser?
+    ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraUserService.updateAssignee(ticket.key, newAssignee?.accountId)
             if (result.isFailure) {
@@ -219,8 +228,8 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
                     // is active and the new assignee no longer satisfies it) — remove it,
                     // leaving every other ticket untouched.
                     tkPanel.allLoadedTickets = tkPanel.allLoadedTickets.filter { it.key != ticket.key }
+                    tkPanel.applySearch()
                 }
-                tkPanel.applySearch()
             }
         }
     }
