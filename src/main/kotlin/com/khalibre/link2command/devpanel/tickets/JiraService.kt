@@ -218,6 +218,32 @@ object JiraService {
 
     fun currentUserEmail(): String? = DevConfig.load().jira.email.takeIf { it.isNotBlank() }
 
+    /**
+     * `acli jira workitem view <key> --fields summary --json` — same call the `create-pr`
+     * shell script makes to build the "TICKET-123: <summary>" PR title.
+     */
+    fun fetchTicketSummary(ticketKey: String): Result<String> {
+        val result = PrService.runCmd(
+            listOf("acli", "jira", "workitem", "view", ticketKey, "--fields", "summary", "--json")
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank())
+            return Result.failure(
+                RuntimeException(
+                    "Failed to fetch Jira ticket '$ticketKey'. Is acli authenticated? Run: acli jira auth login --web"
+                )
+            )
+        return try {
+            val root = JsonParser.parseString(result.stdout)
+            val item = if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
+            val summary = item.getAsJsonObject("fields").get("summary").asString.trim()
+            if (summary.isBlank())
+                Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
+            else Result.success(summary)
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Failed to parse summary from acli output."))
+        }
+    }
+
     fun transitionTicket(ticketKey: String, targetStatus: String): Result<String> {
         val result = PrService.runCmd(
             listOf(

@@ -274,12 +274,17 @@ object PrService {
 
     data class CmdResult(val stdout: String, val stderr: String, val exitCode: Int)
 
-    fun runCmd(args: List<String>, workDir: File? = null): CmdResult {
+    fun runCmd(
+        args: List<String>,
+        workDir: File? = null,
+        env: Map<String, String> = emptyMap()
+    ): CmdResult {
         val pb = ProcessBuilder(args).apply {
             workDir?.let { directory(it) }
             // include user's PATH so gh is found
             environment()["PATH"] = System.getenv("PATH")
                 ?: "/usr/local/bin:/usr/bin:/bin:/home/${System.getProperty("user.name")}/.local/bin"
+            env.forEach { (k, v) -> environment()[k] = v }
         }
         val proc = pb.start()
         val stdout = proc.inputStream.bufferedReader().readText()

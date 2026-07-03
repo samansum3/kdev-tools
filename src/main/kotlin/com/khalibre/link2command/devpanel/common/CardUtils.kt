@@ -51,6 +51,7 @@ object CardUtils {
             isFocusPainted = false
             isContentAreaFilled = false
             margin = JBUI.insets(2, BUTTON_H_PADDING)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             addActionListener { action() }
             addMouseListener(object : MouseAdapter() {
                 override fun mouseEntered(e: MouseEvent) {

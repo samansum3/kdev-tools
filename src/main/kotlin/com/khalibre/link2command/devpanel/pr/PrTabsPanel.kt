@@ -1,19 +1,21 @@
 package com.khalibre.link2command.devpanel.pr
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.MessageType
+import com.intellij.openapi.ui.popup.Balloon
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.JBColor
+import com.intellij.ui.awt.RelativePoint
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.common.ProjectPaths
 import java.awt.*
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
+import java.awt.event.*
 import javax.swing.*
 import javax.swing.border.CompoundBorder
+import javax.swing.event.HyperlinkEvent
 
 /**
  * Hosts multiple [PrPanel] instances behind a compact, browser-style sub-tab strip —
@@ -25,7 +27,7 @@ import javax.swing.border.CompoundBorder
  * Tabs are named A, B, C … by default, renamable via double-click, and closable via an
  * "×" affordance. At least one tab is always kept open.
  */
-class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
+class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
 
     private fun cwDir() = ProjectPaths.cwDir(project)
 
@@ -75,13 +77,100 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    private val createPrButton = JButton("Create PR").apply {
+        font = font.deriveFont(font.size - 1f)
+        isFocusPainted = false
+        isContentAreaFilled = false
+        isBorderPainted = false
+        border = JBUI.Borders.empty()
+        margin = JBUI.emptyInsets()
+        foreground = Color(24, 95, 165)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        addActionListener { createPr() }
+    }
+
+
+    private var createPrSpinTimer: Timer? = null
+
+    private fun setCreatePrBusy(busy: Boolean) {
+        createPrSpinTimer?.stop(); createPrSpinTimer = null
+        if (busy) {
+            var frame = 0
+            createPrButton.text = "Creating…"
+            createPrSpinTimer = Timer(120) {
+                createPrButton.icon = reloadSpinIcons[frame++ % reloadSpinIcons.size]
+            }.also { it.start() }
+            createPrButton.isEnabled = false
+        } else {
+            createPrButton.text = "Create PR"
+            createPrButton.isEnabled = true
+        }
+    }
+
+    private fun createPr() {
+        setCreatePrBusy(true)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = CreatePrService.run(project)
+            SwingUtilities.invokeLater {
+                setCreatePrBusy(false)
+                result.onSuccess { outcome ->
+                    val urlHtml = outcome.prUrl?.let { "<a href=\"$it\">$it</a>" } ?: "(created)"
+                    val note = if (!outcome.statusTransitioned)
+                        "<br><i>Ticket status transition to \"PR Open\" failed — update it manually.</i>" else ""
+                    showCreatePrBalloon(
+                        "✓ PR created for <b>${outcome.ticketKey}</b><br>$urlHtml$note",
+                        MessageType.INFO
+                    ) { e ->
+                        if (e.eventType == HyperlinkEvent.EventType.ACTIVATED) {
+                            outcome.prUrl?.let {
+                                try {
+                                    Desktop.getDesktop().browse(java.net.URI(it))
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }
+                    refreshActive()
+                }
+                result.onFailure { e ->
+                    showCreatePrBalloon(
+                        "✗ ${CardUtils.escHtml(e.message ?: "Failed to create PR")}",
+                        MessageType.ERROR
+                    )
+                }
+            }
+        }
+    }
+
+    private fun showCreatePrBalloon(
+        html: String,
+        type: MessageType,
+        listener: ((HyperlinkEvent) -> Unit)? = null
+    ) {
+        JBPopupFactory.getInstance()
+            .createHtmlTextBalloonBuilder(html, type, listener?.let { l ->
+                javax.swing.event.HyperlinkListener { e -> l(e) }
+            })
+            .setFadeoutTime(7000)
+            .createBalloon()
+            .show(
+                RelativePoint(createPrButton, Point(createPrButton.width / 2, 0)),
+                Balloon.Position.above
+            )
+    }
+
     init {
+        val eastControls = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+            isOpaque = false
+            add(reloadButton.apply { border = JBUI.Borders.emptyRight(4) })
+            add(createPrButton)
+        }
         val stripRowWrap = JPanel(BorderLayout()).apply {
             isOpaque = false
-            maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(22))
-            preferredSize = Dimension(preferredSize.width, JBUI.scale(22))
+            maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(28))
+            preferredSize = Dimension(preferredSize.width, JBUI.scale(28))
             add(tabStripRow, BorderLayout.WEST)
-            add(reloadButton, BorderLayout.EAST)
+            add(eastControls, BorderLayout.EAST)
         }
         val separator = JPanel().apply {
             isOpaque = true
@@ -196,10 +285,10 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun buildAddButton(): JComponent {
         val normalFg = JBUI.CurrentTheme.Label.disabledForeground()
         val btn = JLabel("+").apply {
-            font = font.deriveFont(Font.BOLD, font.size2D)
+            font = font.deriveFont(Font.BOLD, font.size + 1f)
             foreground = normalFg
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = JBUI.Borders.empty(0, 10, 2, 4)
+            border = JBUI.Borders.empty(4, 12, 6, 4)
             toolTipText = "Add tab"
         }
         btn.addMouseListener(object : MouseAdapter() {
@@ -233,10 +322,10 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
             border = JBUI.Borders.empty(0, 2, 0, 4)
         }
         val closeLabel = JLabel("\u00D7").apply { // ×
-            font = font.deriveFont(font.size - 1f)
+            font = font.deriveFont(font.size + 1f)
             foreground = normalFg
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = JBUI.Borders.empty(0, 0, 0, 2)
+            border = JBUI.Borders.empty(0, 2, 0, 4)
             toolTipText = if (state.tabs.size > 1) "Close tab" else "Can't close the last tab"
         }
 
@@ -244,7 +333,7 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
             isOpaque = false
             border = CompoundBorder(
                 JBUI.Borders.customLine(if (isSelected) accent else transparent, 0, 0, 2, 0),
-                JBUI.Borders.empty(2, 6, 4, 4)
+                JBUI.Borders.empty(4, 6, 5, 4)
             )
             add(nameLabel, BorderLayout.CENTER)
             add(closeLabel, BorderLayout.EAST)
