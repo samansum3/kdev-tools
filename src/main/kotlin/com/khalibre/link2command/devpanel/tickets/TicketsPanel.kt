@@ -1266,6 +1266,7 @@ class TicketsPanel(
 
         fun setCurrentStatus(status: String) {
             currentStatus = status
+            ticket.status = status
             updateComboBackground(status)
             rerenderComboToContent()
         }

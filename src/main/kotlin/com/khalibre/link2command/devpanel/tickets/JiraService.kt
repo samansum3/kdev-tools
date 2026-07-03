@@ -10,7 +10,7 @@ import java.io.File
 data class JiraTicket(
     val key: String,
     val summary: String,
-    val status: String,
+    var status: String,
     val statusColorName: String? = null,
     val assigneeName: String?,
     val assigneeEmail: String?,
