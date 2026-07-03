@@ -963,10 +963,9 @@ class TicketsPanel(
 
                 // Popup row: "→ [status badge]"
                 val badge = makeStatusBadge(status)
-                return JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                return JPanel(FlowLayout(FlowLayout.LEFT, 0, 2)).apply {
                     isOpaque = isSelected
                     if (isSelected) background = list.selectionBackground
-                    border = JBUI.Borders.empty(2, 4)
                     add(JLabel("→").apply {
                         foreground = if (isSelected) list.selectionForeground else list.foreground
                         border = JBUI.Borders.emptyRight(8)
@@ -1014,20 +1013,30 @@ class TicketsPanel(
             setCurrentStatus(targetStatus)
             setEnabledState(false)
 
-//            setStatus("${ticket.key} → $targetStatus…")
             ApplicationManager.getApplication().executeOnPooledThread {
-                val result = if (targetStatus == "In Progress")
-                    JiraService.transitionToInProgress(ticket.key)
-                else
-                    JiraService.transitionTicket(ticket.key, targetStatus)
-                SwingUtilities.invokeLater {
-                    if (result.isSuccess) {
+                val result = JiraService.transitionTicket(ticket.key, targetStatus)
+                if (result.isSuccess) {
+                    // Still on background thread — safe to do the network call here
+                    val refreshed = try {
+                        JiraService.refreshTicket(currentJql, ticket.key)
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    SwingUtilities.invokeLater {
                         // Card gets fully rebuilt with authoritative data (including a
                         // freshly-fetched transitions list) — nothing left to reset here.
-//                        setStatus("✓ ${ticket.key} → $targetStatus"); refresh()
-                        refresh()
+                        if (refreshed == null) {
+                            // No longer matches current filters (e.g. an "Unassigned"/"My Tasks" filter
+                            // is active and the new assignee no longer satisfies it) — remove it,
+                            // leaving every other ticket untouched.
+                            allLoadedTickets = allLoadedTickets.filter { it.key != ticket.key }
+                            applySearch()
+                        }
                         setEnabledState(true)
-                    } else {
+                    }
+                } else {
+                    SwingUtilities.invokeLater {
                         setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
                         setCurrentStatus(originalStatus)
                         combo.selectedItem = null
@@ -1042,7 +1051,6 @@ class TicketsPanel(
             setEnabledState(false)
         }) { result, _ ->
             val newModel = DefaultComboBoxModel<Pair<String, String>>()
-//            newModel.addElement(currentEntry)
             result?.forEach { pair -> if (pair.first != currentStatus) newModel.addElement(pair) }
             combo.model = newModel
             combo.selectedItem = null
