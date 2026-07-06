@@ -565,20 +565,6 @@ class PrPanel(
             )
         ).apply {
             isOpaque = false; border = JBUI.Borders.emptyLeft(-4)
-            if (isAuthor) {
-                add(makeActionButton("Checkout") { doCheckout(pr, repo) })
-                add(makeActionButton("Rebase") { doRebase(pr, repo) })
-                add(makeActionButton("Update PR") { doUpdatePr(pr) })
-            } else {
-                add(makeActionButton("Approve") { doApprovePr(pr, repo) })
-                if (hasMergePermission) {
-                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
-                }
-            }
-
-            if (hasMergePermission) {
-                add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
-            }
             add(makeActionButton("View") {
                 try {
                     java.awt.Desktop.getDesktop().browse(java.net.URI(pr.url))
@@ -594,6 +580,21 @@ class PrPanel(
                 )
             }
             add(copyLinkBtn)
+
+            if (isAuthor) {
+                add(makeActionButton("Checkout") { doCheckout(pr, repo) })
+                add(makeActionButton("Rebase") { doRebase(pr, repo) })
+                add(makeActionButton("Update PR") { doUpdatePr(pr) })
+            } else {
+                add(makeActionButton("Approve") { doApprovePr(pr, repo) })
+                if (hasMergePermission) {
+                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
+                }
+            }
+
+            if (hasMergePermission) {
+                add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
+            }
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
 
