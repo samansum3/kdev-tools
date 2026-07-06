@@ -1031,8 +1031,12 @@ class TicketsPanel(
                             // is active and the new assignee no longer satisfies it) — remove it,
                             // leaving every other ticket untouched.
                             allLoadedTickets = allLoadedTickets.filter { it.key != ticket.key }
-                            applySearch()
+                        } else {
+                            ticket.status = refreshed.status
+                            ticket.statusColorName = refreshed.statusColorName
+                            ticket.availableTransitions = refreshed.availableTransitions
                         }
+                        applySearch()
                         setEnabledState(true)
                     }
                 } else {

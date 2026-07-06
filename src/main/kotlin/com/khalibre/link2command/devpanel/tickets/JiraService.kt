@@ -11,7 +11,7 @@ data class JiraTicket(
     val key: String,
     val summary: String,
     var status: String,
-    val statusColorName: String? = null,
+    var statusColorName: String? = null,
     var assigneeName: String?,
     var assigneeEmail: String?,
     var assigneeAccountId: String? = null,
@@ -19,7 +19,7 @@ data class JiraTicket(
     val issueTypeIconUrl: String?,
     val priority: String?,
     val priorityIconUrl: String?,
-    val availableTransitions: List<String>? = null
+    var availableTransitions: List<String>? = null
 )
 
 data class TicketFilters(
