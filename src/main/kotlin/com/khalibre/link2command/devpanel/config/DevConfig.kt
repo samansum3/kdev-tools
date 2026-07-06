@@ -8,7 +8,8 @@ data class GitConfig(
     val base_branch: String = "main",
     val stack_remote: String = "origin",
     val default_reviewers: List<String> = emptyList(),
-    val user_session: String = ""
+    val user_session: String = "",
+    val can_merge: Boolean = false
 )
 
 data class JiraConfig(

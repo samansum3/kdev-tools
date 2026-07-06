@@ -7,7 +7,10 @@ import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.pr.GitService
 import com.khalibre.link2command.devpanel.pr.PrService
 import com.khalibre.link2command.devpanel.tickets.TicketsPanel
+import com.khalibre.link2command.devpanel.tickets.WrapLayout
 import java.awt.*
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.*
 
 /**
@@ -35,6 +38,9 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var ticketConfigPanel: TicketConfigPanel? = null
     private var ticketsPanelSupplier: (() -> TicketsPanel?)? = null
 
+    private val hasMergePermission = makeConfigBadge("Yes", true)
+    private val noMergePermission = makeConfigBadge("No", false)
+
     private val subTabs = JBTabbedPane()
 
     init {
@@ -43,6 +49,53 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         loadConfig()
         loadUpstreamBranches()
         loadRemotes()
+        wireMergePermissionExclusivity()
+    }
+
+
+    /** Keeps exactly one of Compact/Default active — clicking one turns the other off. */
+    private fun wireMergePermissionExclusivity() {
+        fun select(chosen: JLabel, other: JLabel) {
+            chosen.putClientProperty("active", true)
+            other.putClientProperty("active", false)
+            TicketsPanel.applyBadgeStyle(chosen)
+            TicketsPanel.applyBadgeStyle(other)
+            chosen.repaint(); other.repaint()
+        }
+        hasMergePermission.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = select(hasMergePermission, noMergePermission)
+        })
+        noMergePermission.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = select(noMergePermission, hasMergePermission)
+        })
+    }
+
+    private fun makeConfigBadge(text: String, initiallyActive: Boolean): JLabel {
+        val label = JLabel(text)
+        label.font = label.font.deriveFont(label.font.size - 2f)
+        label.isOpaque = true
+        label.putClientProperty("active", initiallyActive)
+        label.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        TicketsPanel.applyBadgeStyle(label)
+        label.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                label.putClientProperty("active", label.getClientProperty("active") != true)
+                TicketsPanel.applyBadgeStyle(label)
+                label.repaint()
+                // Note: don't call refresh/save — user clicks Save explicitly
+            }
+
+            override fun mouseEntered(e: MouseEvent) {
+                label.putClientProperty("hovered", true)
+                TicketsPanel.applyBadgeStyle(label)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                label.putClientProperty("hovered", false)
+                TicketsPanel.applyBadgeStyle(label)
+            }
+        })
+        return label
     }
 
     /** [supplier] should return whichever TicketsPanel sub-tab is currently active. */
@@ -74,8 +127,8 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         outer.border = JBUI.Borders.empty(10, 12)
 
         val form = JPanel(GridBagLayout())
-        form.addMouseListener(object : java.awt.event.MouseAdapter() {
-            override fun mouseClicked(e: java.awt.event.MouseEvent) = requestFocusInWindow().let {}
+        form.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = requestFocusInWindow().let {}
         })
 
         fun sectionLabel(text: String) = JBLabel(text).apply {
@@ -130,21 +183,29 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         fullRow(5, fieldLabel("User session (cookie for PR upload)"))
         fullRow(6, userSessionField)
 
+        val itemModeRow = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
+            isOpaque = false; alignmentX = LEFT_ALIGNMENT
+        }
+        itemModeRow.add(noMergePermission)
+        itemModeRow.add(hasMergePermission)
+        leftCell(7, fieldLabel("Has merge permission"))
+        leftCell(8, itemModeRow)
+
         // JIRA
-        fullRow(7, sectionLabel("JIRA"))
-        leftCell(8, fieldLabel("Base URL"))
-        rightCell(8, fieldLabel("Project key"))
-        leftCell(9, jiraUrlField)
-        rightCell(9, projectKeyField)
-        leftCell(10, fieldLabel("Email"))
-        rightCell(10, fieldLabel("API token"))
-        leftCell(11, emailField)
-        rightCell(11, apiTokenField)
-        fullRow(12, hint("Stored in ~/.config/devtools/config.json"))
+        fullRow(9, sectionLabel("JIRA"))
+        leftCell(10, fieldLabel("Base URL"))
+        rightCell(10, fieldLabel("Project key"))
+        leftCell(11, jiraUrlField)
+        rightCell(11, projectKeyField)
+        leftCell(12, fieldLabel("Email"))
+        rightCell(12, fieldLabel("API token"))
+        leftCell(13, emailField)
+        rightCell(13, apiTokenField)
+        fullRow(14, hint("Stored in ~/.config/devtools/config.json"))
 
         // Spacer
         form.add(JPanel(), GridBagConstraints().apply {
-            gridx = 0; gridy = 13; gridwidth = 3
+            gridx = 0; gridy = 15; gridwidth = 3
             weighty = 1.0; fill = GridBagConstraints.BOTH
         })
 
@@ -225,6 +286,11 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         emailField.text = cfg.jira.email
         apiTokenField.text = cfg.jira.api_token
         statusLabel.text = ""
+
+        hasMergePermission.putClientProperty("active", cfg.git.can_merge)
+        noMergePermission.putClientProperty("active", !cfg.git.can_merge)
+        TicketsPanel.applyBadgeStyle(hasMergePermission)
+        TicketsPanel.applyBadgeStyle(noMergePermission)
     }
 
     private fun saveConfig() {
@@ -235,7 +301,8 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
                 base_branch = (baseBranchCombo.selectedItem as? String ?: "").trim(),
                 stack_remote = stackRemoteCombo.selectedItem as String,
                 default_reviewers = reviewers,
-                user_session = String(userSessionField.password)
+                user_session = String(userSessionField.password),
+                can_merge = hasMergePermission.getClientProperty("active") == true
             ),
             jira = JiraConfig(
                 base_url = jiraUrlField.text.trim().trimEnd('/'),
