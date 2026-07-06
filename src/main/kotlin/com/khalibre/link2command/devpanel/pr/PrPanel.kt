@@ -437,8 +437,9 @@ class PrPanel(
                     font = font.deriveFont(font.size - 1f)
                     foreground = JBUI.CurrentTheme.Label.disabledForeground()
                 })
+            val cfg = DevConfig.load()
             prs.forEach { pr ->
-                cardsPanel.add(buildPrCard(pr, repo)); cardsPanel.add(
+                cardsPanel.add(buildPrCard(pr, repo, cfg.git.can_merge)); cardsPanel.add(
                 Box.createVerticalStrut(6)
             )
             }
@@ -493,7 +494,7 @@ class PrPanel(
         return "Open PRs$branchPart: $total  ·  awaiting review: $awaiting"
     }
 
-    private fun buildPrCard(pr: PullRequest, repo: String): JPanel {
+    private fun buildPrCard(pr: PullRequest, repo: String, hasMergePermission: Boolean): JPanel {
         val card = CardUtils.makeCard("${pr.number}", "pr")
         val gbc = CardUtils.cardGbc()
 
@@ -560,9 +561,14 @@ class PrPanel(
                 add(makeActionButton("Update PR") { doUpdatePr(pr) })
             } else {
                 add(makeActionButton("Approve") { doApprovePr(pr, repo) })
-                add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
+                if (hasMergePermission) {
+                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
+                }
             }
-            add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
+
+            if (hasMergePermission) {
+                add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
+            }
             add(makeActionButton("View") {
                 try {
                     java.awt.Desktop.getDesktop().browse(java.net.URI(pr.url))
