@@ -6,6 +6,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.common.BadgeUtils
 import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.config.AuthorCache
 import com.khalibre.link2command.devpanel.config.DevConfig
@@ -716,9 +717,7 @@ class PrPanel(
             ReviewState.AWAITING -> Color(24, 95, 165)
             null -> Color(163, 45, 45)
         }
-        return JLabel(text).apply {
-            isOpaque = true; background = bg; foreground = fg
-            font = font.deriveFont(font.size - 2f); border = JBUI.Borders.empty(2, 6)
+        return BadgeUtils.makeBadge(text, bg, fg).apply {
             toolTipText = tooltip
         }
     }
@@ -731,11 +730,7 @@ class PrPanel(
         }
         val luminance = (0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue) / 255
         val fg = if (luminance > 0.5) Color(0x1F2328) else Color.WHITE
-        return JLabel(name).apply {
-            isOpaque = true; background = bg; foreground = fg
-            font = Font(Font.MONOSPACED, Font.PLAIN, font.size - 2); border =
-            JBUI.Borders.empty(2, 6)
-        }
+        return BadgeUtils.makeBadge(name, bg, fg)
     }
 
     private fun makeActionButton(text: String, action: () -> Unit) =
