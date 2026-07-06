@@ -511,6 +511,7 @@ class PrPanel(
             Insets(0, 0, 0, 0)
             add(JBLabel(pr.title).apply {
                 font = font.deriveFont(Font.BOLD); minimumSize = Dimension(0, preferredSize.height)
+                toolTipText = pr.title
             }, g)
         }
         gbc.gridy = 0; card.add(titlePanel, gbc)
@@ -539,10 +540,18 @@ class PrPanel(
             ReviewState.COMMENTED -> "💬 ${truncateNames(pr.commentedBy)}"
             ReviewState.AWAITING -> "⏳ review"
         }
+        val reviewTooltip = when (pr.reviewState) {
+            ReviewState.APPROVED -> "Approved by ${truncateNames(pr.approvedBy)}"
+            ReviewState.CHANGES_REQUESTED -> "Changes requested by ${truncateNames(pr.changesRequestedBy)}"
+            ReviewState.COMMENTED -> "Unresolved comments from ${truncateNames(pr.commentedBy)}"
+            ReviewState.AWAITING -> "Awaiting review"
+        }
         val badgePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyLeft(-4)
-            add(makeBadge(reviewText, pr.reviewState))
-            if (pr.mergeable == MergeableState.CONFLICTING) add(makeBadge("⚠ conflict", null))
+            add(makeBadge(reviewText, pr.reviewState, reviewTooltip))
+            if (pr.mergeable == MergeableState.CONFLICTING) {
+                add(makeBadge("⚠ conflict", null, "This branch has merge conflicts with the base branch"))
+            }
             pr.labels.forEach { (name, color) -> add(makeLabelBadge(name, color)) }
         }
         gbc.gridy = 2; card.add(badgePanel, gbc)
@@ -692,7 +701,7 @@ class PrPanel(
         cardsPanel.revalidate(); cardsPanel.repaint()
     }
 
-    private fun makeBadge(text: String, state: ReviewState?): JLabel {
+    private fun makeBadge(text: String, state: ReviewState?, tooltip: String?): JLabel {
         val bg = when (state) {
             ReviewState.APPROVED -> Color(234, 243, 222)
             ReviewState.CHANGES_REQUESTED -> Color(250, 238, 218)
@@ -710,6 +719,7 @@ class PrPanel(
         return JLabel(text).apply {
             isOpaque = true; background = bg; foreground = fg
             font = font.deriveFont(font.size - 2f); border = JBUI.Borders.empty(2, 6)
+            toolTipText = tooltip
         }
     }
 
