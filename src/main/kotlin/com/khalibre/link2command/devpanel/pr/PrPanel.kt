@@ -411,7 +411,7 @@ class PrPanel(
         val selectedAuthor = authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
         val filtered = lastLoadedPrs.filter { pr ->
             (selectedBranch == null || pr.baseRefName == selectedBranch) &&
-                (selectedAuthor == null || pr.author == selectedAuthor)
+                    (selectedAuthor == null || pr.author == selectedAuthor)
         }
         renderPrList(filtered, repo, selectedBranch)
     }
@@ -555,21 +555,29 @@ class PrPanel(
         ).apply {
             isOpaque = false; border = JBUI.Borders.emptyLeft(-4)
             if (isAuthor) {
-                add(makeActionButton("checkout") { doCheckout(pr, repo) })
-                add(makeActionButton("rebase") { doRebase(pr, repo) })
-                add(makeActionButton("update pr") { doUpdatePr(pr) })
+                add(makeActionButton("Checkout") { doCheckout(pr, repo) })
+                add(makeActionButton("Rebase") { doRebase(pr, repo) })
+                add(makeActionButton("Update PR") { doUpdatePr(pr) })
             } else {
-                add(makeActionButton("approve") { doApprovePr(pr, repo) })
-                add(makeActionButton("approve + merge") { doMergePr(pr, repo, true) })
+                add(makeActionButton("Approve") { doApprovePr(pr, repo) })
+                add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
             }
-            add(makeActionButton("merge") { doMergePr(pr, repo, false) })
-            add(makeActionButton("view") {
+            add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
+            add(makeActionButton("View") {
                 try {
                     java.awt.Desktop.getDesktop().browse(java.net.URI(pr.url))
                 } catch (e: Exception) {
                     setStatus("Could not open browser")
                 }
             })
+
+            lateinit var copyLinkBtn: JButton
+            copyLinkBtn = CardUtils.makeActionButton("Copy link") {
+                CardUtils.copyToClipboardWithBalloon(
+                    pr.url, copyLinkBtn, "Link copied"
+                )
+            }
+            add(copyLinkBtn)
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
 
