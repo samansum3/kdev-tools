@@ -7,6 +7,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.common.BadgeUtils
 import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.config.DevConfig
 import java.awt.*
@@ -1325,30 +1326,7 @@ class TicketsPanel(
     private fun makeStatusBadge(status: String, fallbackColorName: String? = null): JLabel {
         val colorName = statusColorByName[status] ?: fallbackColorName
         val (bg, fg) = colorName?.let { jiraStatusColor(it) } ?: legacyGuessColor(status)
-        return object : JLabel(status) {
-            // BasicComboBoxUI.paintCurrentValue() forcibly overwrites a renderer component's
-            // background/foreground with the combo's own colors right before painting the
-            // collapsed value. Overriding the getters keeps the real badge colors intact no
-            // matter what external code (including Swing internals) tries to set them to.
-            override fun getBackground(): Color = bg
-            override fun getForeground(): Color = fg
-
-            override fun paintComponent(g: Graphics) {
-                val g2 = g.create() as Graphics2D
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = background
-                val w = width.toDouble()
-                val h = height.toDouble()
-                val r = JBUI.scale(4).toDouble()
-                g2.fill(java.awt.geom.RoundRectangle2D.Double(0.0, 0.0, w, h, r, r))
-                g2.dispose()
-                super.paintComponent(g)
-            }
-        }.apply {
-            isOpaque = false
-            font = font.deriveFont(font.size - 2f)
-            border = JBUI.Borders.empty(2, 6)
-        }
+        return BadgeUtils.makeBadge(status, bg, fg)
     }
 
     private fun resolveStatusColors(status: String): Pair<Color, Color> =
