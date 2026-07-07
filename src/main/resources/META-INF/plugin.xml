@@ -1,11 +1,11 @@
 <idea-plugin>
   <id>com.khalibre.terminal-link2command</id>
-  <name>Dev Panel</name>
+  <name>Khalibre AIO</name>
   <version>1.1.0</version>
   <vendor>Khalibre</vendor>
 
   <description>
-    Dev Panel — PR tools, Jira ticket management, and shared dev config.
+    Khalibre AIO — PR tools, Jira ticket management, and shared dev config.
     Also makes [r: command] links in terminal output clickable.
   </description>
 
@@ -20,7 +20,7 @@
 
     <!-- New Dev Panel tool window -->
     <toolWindow
-      id="Dev Panel"
+      id="Khalibre AIO"
       anchor="right"
       secondary="false"
       canCloseContents="false"
