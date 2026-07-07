@@ -57,11 +57,11 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
     }
     private var reloadSpinTimer: Timer? = null
     private val reloadSpinIcons = listOf(
-        AllIcons.Actions.Refresh,
         AllIcons.Process.Step_1,
         AllIcons.Process.Step_2,
         AllIcons.Process.Step_3,
-        AllIcons.Process.Step_4
+        AllIcons.Process.Step_4,
+        AllIcons.Process.Step_5
     )
 
     private fun setReloadSpinning(spinning: Boolean) {
@@ -103,6 +103,7 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
             createPrButton.isEnabled = false
         } else {
             createPrButton.text = "Create PR"
+            createPrButton.icon = null
             createPrButton.isEnabled = true
         }
     }
@@ -263,7 +264,8 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
             rebuildStrip() // revert visual to the old name
             return
         }
-        state = state.copy(tabs = state.tabs.map { if (it.id == tabId) it.copy(name = trimmed) else it })
+        state =
+            state.copy(tabs = state.tabs.map { if (it.id == tabId) it.copy(name = trimmed) else it })
         persist()
         rebuildStrip()
     }
