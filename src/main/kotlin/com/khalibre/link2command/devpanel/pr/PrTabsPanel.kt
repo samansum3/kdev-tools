@@ -86,6 +86,7 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
         margin = JBUI.emptyInsets()
         foreground = Color(24, 95, 165)
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        toolTipText = "Create a pull request from the current branch"
         addActionListener { createPr() }
     }
 

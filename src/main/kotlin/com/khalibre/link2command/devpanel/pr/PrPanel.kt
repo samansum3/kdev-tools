@@ -597,10 +597,12 @@ class PrPanel(
                 } catch (e: Exception) {
                     setStatus("Could not open browser")
                 }
+            }.apply {
+                toolTipText = if (isAuthor) "Open your PR in browser" else "Open this PR in browser"
             })
 
             lateinit var copyLinkBtn: JButton
-            copyLinkBtn = CardUtils.makeActionButton("Copy link") {
+            copyLinkBtn = makeActionButton("Copy link") {
                 CardUtils.copyToClipboardWithBalloon(
                     pr.url, copyLinkBtn, "Link copied"
                 )
@@ -608,18 +610,28 @@ class PrPanel(
             add(copyLinkBtn)
 
             if (isAuthor) {
-                add(makeActionButton("Checkout") { doCheckout(pr, repo) })
-                add(makeActionButton("Rebase") { doRebase(pr, repo) })
-                add(makeActionButton("Update PR") { doUpdatePr(pr) })
+                add(makeActionButton("Checkout") { doCheckout(pr, repo) }.apply {
+                    toolTipText = "Checkout this PR branch"
+                })
+                add(makeActionButton("Rebase") { doRebase(pr, repo) }.apply {
+                    toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
+                })
+                add(makeActionButton("Update PR") { doUpdatePr(pr) }.apply {
+                    toolTipText = "Update PR description, remove dependency text, add image, etc."
+                })
             } else {
                 add(makeActionButton("Approve") { doApprovePr(pr, repo) })
                 if (hasMergePermission) {
-                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) })
+                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) }.apply {
+                        toolTipText = "Approve and merge in one step"
+                    })
                 }
             }
 
             if (hasMergePermission) {
-                add(makeActionButton("Merge") { doMergePr(pr, repo, false) })
+                add(makeActionButton("Merge") { doMergePr(pr, repo, false) }.apply {
+                    toolTipText = "Merge this PR into ${pr.baseRefName}"
+                })
             }
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
