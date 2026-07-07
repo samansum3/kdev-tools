@@ -163,22 +163,15 @@ object CreatePrService {
      * the same `<img>` markdown snippet. Returns null for "nothing to embed", never throws.
      */
     private fun tryUploadClipboardImage(): String? {
-        val image = try {
-            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-            if (!clipboard.isDataFlavorAvailable(DataFlavor.imageFlavor)) return null
-            clipboard.getData(DataFlavor.imageFlavor) as? java.awt.Image ?: return null
+        val buffered = try {
+            readClipboardImage() ?: return null
         } catch (_: Exception) {
             return null
         }
 
         val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() } ?: return null
-
-        val width = image.getWidth(null).takeIf { it > 0 } ?: return null
-        val height = image.getHeight(null).takeIf { it > 0 } ?: return null
-        val buffered = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
-        val g = buffered.createGraphics()
-        g.drawImage(image, 0, 0, null)
-        g.dispose()
+        val width = buffered.width
+        val height = buffered.height
 
         val tmpFile = File.createTempFile("clipboard-", ".png")
         return try {
@@ -194,6 +187,43 @@ object CreatePrService {
             null
         } finally {
             tmpFile.delete()
+        }
+    }
+
+    private fun readClipboardImage(): BufferedImage? {
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        val contents = clipboard.getContents(null) ?: return null
+
+        // 1. Standard Java image flavor (works for most GUI toolkits' native clipboard managers)
+        if (contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+            try {
+                val awtImage = contents.getTransferData(DataFlavor.imageFlavor) as? java.awt.Image
+                if (awtImage != null) {
+                    val buffered = BufferedImage(
+                        awtImage.getWidth(null),
+                        awtImage.getHeight(null),
+                        BufferedImage.TYPE_INT_ARGB
+                    )
+                    val g = buffered.createGraphics()
+                    g.drawImage(awtImage, 0, 0, null)
+                    g.dispose()
+                    return buffered
+                }
+            } catch (_: Exception) { /* fall through to raw-stream flavors */
+            }
+        }
+
+        // 2. Raw image/* stream flavor — this is what flameshot (and most X11 screenshot tools)
+        //    actually put on the clipboard; Java doesn't expose it as DataFlavor.imageFlavor.
+        val streamFlavor = contents.transferDataFlavors.firstOrNull {
+            it.mimeType.startsWith("image/", ignoreCase = true) &&
+                    it.representationClass == java.io.InputStream::class.java
+        } ?: return null
+
+        return try {
+            (contents.getTransferData(streamFlavor) as? java.io.InputStream)?.use { ImageIO.read(it) }
+        } catch (_: Exception) {
+            null
         }
     }
 }
