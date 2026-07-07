@@ -324,7 +324,8 @@ class PrPanel(
         authors.sortedWith(compareByDescending { it.login == currentUser })
             .forEach { authorCombo.addItem(it.login) }
         val target = previousSelection?.takeIf { it != "— none —" } ?: savedAuthor
-        val idx = (0 until authorCombo.itemCount).firstOrNull { authorCombo.getItemAt(it) == target }
+        val idx =
+            (0 until authorCombo.itemCount).firstOrNull { authorCombo.getItemAt(it) == target }
         authorCombo.selectedIndex = idx ?: 0
         authorCombo.addActionListener(authorListener)
     }
@@ -470,7 +471,11 @@ class PrPanel(
                     authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
                 val prs = PrService.fetchPrs(repo, selectedBranch, selectedAuthor)
                 val mergeableMap = PrService.fetchMergeableStates(repo, prs.map { it.number })
-                prs.forEach { it.mergeable = mergeableMap[it.number] ?: MergeableState.UNKNOWN }
+                prs.forEach {
+                    val info = mergeableMap[it.number]
+                    it.mergeable = info?.mergeable ?: MergeableState.UNKNOWN
+                    it.isOutdated = info?.isOutdated ?: false
+                }
                 SwingUtilities.invokeLater {
                     lastLoadedPrs = prs
                     lastLoadedRepo = repo
@@ -551,7 +556,28 @@ class PrPanel(
             isOpaque = false; border = JBUI.Borders.emptyLeft(-4)
             add(makeBadge(reviewText, pr.reviewState, reviewTooltip))
             if (pr.mergeable == MergeableState.CONFLICTING) {
-                add(makeBadge("⚠ conflict", null, "This branch has merge conflicts with the base branch"))
+                add(
+                    makeBadge(
+                        "⚠ conflict",
+                        null,
+                        "This branch has merge conflicts with ${pr.baseRefName}"
+                    )
+                )
+            } else if (pr.isOutdated) {
+                val tooltip = if (isAuthor) {
+                    "Your branch is out of date with ${pr.baseRefName}. Update it to include the latest changes."
+                } else {
+                    "This branch is out of date with ${pr.baseRefName}."
+                }
+                add(
+                    makeBadge(
+                        "ⓘ outdated",
+                        null,
+                        tooltip,
+                        bg = Color(240, 230, 255),
+                        fg = Color(90, 50, 140)
+                    )
+                )
             }
             pr.labels.forEach { (name, color) -> add(makeLabelBadge(name, color)) }
         }
@@ -703,22 +729,28 @@ class PrPanel(
         cardsPanel.revalidate(); cardsPanel.repaint()
     }
 
-    private fun makeBadge(text: String, state: ReviewState?, tooltip: String?): JLabel {
-        val bg = when (state) {
+    private fun makeBadge(
+        text: String,
+        state: ReviewState?,
+        tooltip: String? = null,
+        bg: Color? = null,
+        fg: Color? = null
+    ): JLabel {
+        val resolvedBg = bg ?: when (state) {
             ReviewState.APPROVED -> Color(234, 243, 222)
             ReviewState.CHANGES_REQUESTED -> Color(250, 238, 218)
             ReviewState.COMMENTED -> Color(235, 235, 250)
             ReviewState.AWAITING -> Color(230, 241, 251)
             null -> Color(252, 235, 235)
         }
-        val fg = when (state) {
+        val resolvedFg = fg ?: when (state) {
             ReviewState.APPROVED -> Color(59, 109, 17)
             ReviewState.CHANGES_REQUESTED -> Color(133, 79, 11)
             ReviewState.COMMENTED -> Color(88, 60, 163)
             ReviewState.AWAITING -> Color(24, 95, 165)
             null -> Color(163, 45, 45)
         }
-        return BadgeUtils.makeBadge(text, bg, fg).apply {
+        return BadgeUtils.makeBadge(text, resolvedBg, resolvedFg).apply {
             toolTipText = tooltip
         }
     }

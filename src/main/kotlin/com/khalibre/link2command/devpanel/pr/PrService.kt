@@ -1,12 +1,9 @@
 package com.khalibre.link2command.devpanel.pr
 
-import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
-import java.awt.Desktop
 import java.io.File
-import java.net.URI
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -16,6 +13,8 @@ enum class MergeableState { MERGEABLE, CONFLICTING, UNKNOWN }
 enum class ReviewState { AWAITING, APPROVED, CHANGES_REQUESTED, COMMENTED }
 
 data class PrReview(val author: String, val state: String)
+
+data class MergeInfo(val mergeable: MergeableState, val isOutdated: Boolean)
 
 data class PullRequest(
     val number: Int,
@@ -28,7 +27,8 @@ data class PullRequest(
     val labels: List<Pair<String, String>>,   // name, color
     val reviews: List<PrReview>,
     val url: String,
-    var mergeable: MergeableState = MergeableState.UNKNOWN
+    var mergeable: MergeableState = MergeableState.UNKNOWN,
+    var isOutdated: Boolean = false
 ) {
     val approvedBy: List<String>
         get() {
@@ -79,8 +79,6 @@ data class PullRequest(
 }
 
 object PrService {
-    private val gson = Gson()
-
     fun rebasePr(project: Project, branch: String): Result<String> {
         val workDir = project.basePath?.let { File(it) }
         val result = runCmd(listOf("bash", "-c", "rebase $branch"), workDir)
@@ -142,15 +140,10 @@ object PrService {
             .filter { !it.isDraft }
     }
 
-    /** Fetch mergeable status for a list of PR numbers in parallel */
-    fun fetchMergeableStates(repo: String, numbers: List<Int>): Map<Int, MergeableState> {
+    /** Fetch mergeable status + outdated-with-base status for a list of PR numbers in parallel */
+    fun fetchMergeableStates(repo: String, numbers: List<Int>): Map<Int, MergeInfo> {
         if (numbers.isEmpty()) return emptyMap()
-        val threads = numbers.map { num ->
-            val thread = Thread { }
-            Pair(num, thread)
-        }
-
-        val results = ConcurrentHashMap<Int, MergeableState>()
+        val results = ConcurrentHashMap<Int, MergeInfo>()
         val latch = CountDownLatch(numbers.size)
 
         numbers.forEach { num ->
@@ -165,20 +158,21 @@ object PrService {
                             "--repo",
                             repo,
                             "--json",
-                            "number,mergeable"
+                            "number,mergeable,mergeStateStatus"
                         )
                     )
                     if (result.exitCode == 0) {
                         val obj = JsonParser.parseString(result.stdout).asJsonObject
-                        val state = obj.get("mergeable")?.asString ?: "UNKNOWN"
-                        results[num] = when (state) {
+                        val mergeable = when (obj.get("mergeable")?.asString ?: "UNKNOWN") {
                             "MERGEABLE" -> MergeableState.MERGEABLE
                             "CONFLICTING" -> MergeableState.CONFLICTING
                             else -> MergeableState.UNKNOWN
                         }
+                        val outdated = obj.get("mergeStateStatus")?.asString == "BEHIND"
+                        results[num] = MergeInfo(mergeable, outdated)
                     }
                 } catch (e: Exception) {
-                    results[num] = MergeableState.UNKNOWN
+                    results[num] = MergeInfo(MergeableState.UNKNOWN, false)
                 } finally {
                     latch.countDown()
                 }
@@ -206,28 +200,6 @@ object PrService {
             runCmd(listOf("gh", "pr", "merge", "$number", "--rebase", "--admin", "--repo", repo))
         return if (result.exitCode == 0) Result.success("PR #$number merged.")
         else Result.failure(RuntimeException(result.stderr.ifBlank { "Merge failed" }))
-    }
-
-    /** gh pr view <number> --web */
-    fun openInBrowser(number: Int) {
-        // Use Desktop API — reliable cross-platform, no PATH issues
-        try {
-            val result =
-                runCmd(listOf("gh", "pr", "view", "$number", "--json", "url", "--jq", ".url"))
-            val url = result.stdout.trim()
-            if (url.startsWith("http") && result.exitCode == 0) {
-                Desktop.getDesktop().browse(URI(url))
-            } else {
-                // fallback: construct URL from upstream repo
-                throw RuntimeException("no url")
-            }
-        } catch (e: Exception) {
-            // last resort: open PR list page
-            try {
-                Desktop.getDesktop().browse(URI("https://github.com"))
-            } catch (_: Exception) {
-            }
-        }
     }
 
     /** Resolve current user's gh login */
