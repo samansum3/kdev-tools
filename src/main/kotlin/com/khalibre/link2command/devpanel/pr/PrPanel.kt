@@ -683,7 +683,7 @@ class PrPanel(
     private fun doRebase(pr: PullRequest, repo: String) {
         setStatus("Rebasing ${pr.headRefName}…")
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = PrService.rebasePr(project, pr.headRefName)
+            val result = PrService.rebasePr(project, pr.headRefName, pr.baseRefName)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) setStatus("✓ Rebased ${pr.headRefName}") else setStatus(
                     "✗ ${result.exceptionOrNull()?.message}"

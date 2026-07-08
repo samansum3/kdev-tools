@@ -3,6 +3,7 @@ package com.khalibre.link2command.devpanel.pr
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
+import com.khalibre.link2command.devpanel.config.DevConfig
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -79,11 +80,57 @@ data class PullRequest(
 }
 
 object PrService {
-    fun rebasePr(project: Project, branch: String): Result<String> {
+    fun rebasePr(
+        project: Project,
+        targetBranch: String? = null,
+        ontoBranch: String? = null
+    ): Result<String> {
         val workDir = project.basePath?.let { File(it) }
-        val result = runCmd(listOf("bash", "-c", "rebase $branch"), workDir)
-        return if (result.exitCode == 0) Result.success(result.stdout)
-        else Result.failure(RuntimeException(result.stderr.ifBlank { "Rebase failed" }))
+            ?: return Result.failure(RuntimeException("No project directory."))
+
+        val currentBranchResult =
+            runCmd(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), workDir)
+        if (currentBranchResult.exitCode != 0)
+            return Result.failure(RuntimeException("Not inside a git repository."))
+        val currentBranch = currentBranchResult.stdout.trim()
+
+        val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
+        val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load().git.base_branch
+
+        val log = StringBuilder()
+
+        if (currentBranch != target) {
+            log.appendLine("Checking out $target...")
+            val checkout = runCmd(listOf("git", "checkout", target), workDir)
+            if (checkout.exitCode != 0)
+                return Result.failure(RuntimeException(checkout.stderr.ifBlank { "Failed to checkout $target" }
+                    .take(300)))
+        } else {
+            log.appendLine("Already on $target.")
+        }
+
+        // Existing remote selection logic: ticket-shaped `onto` → origin, else upstream
+        val remote = if (Regex("^[A-Z]+-[0-9]+$").matches(onto)) "origin" else "upstream"
+
+        log.appendLine("Fetching $remote/$onto...")
+        val fetch = runCmd(listOf("git", "fetch", remote, onto, "--quiet"), workDir)
+        if (fetch.exitCode != 0)
+            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $remote/$onto" }
+                .take(300)))
+
+        log.appendLine("Rebasing $target onto $remote/$onto...")
+        val pull = runCmd(listOf("git", "pull", "--rebase", remote, onto), workDir)
+        if (pull.exitCode != 0)
+            return Result.failure(
+                RuntimeException(
+                    pull.stderr.ifBlank { pull.stdout }
+                        .ifBlank { "Rebase failed — resolve conflicts and continue manually" }
+                        .take(300)
+                )
+            )
+
+        log.appendLine("Done. $target rebased onto $remote/$onto.")
+        return Result.success(log.toString().trim())
     }
 
     fun updatePr(project: Project): Result<String> {
