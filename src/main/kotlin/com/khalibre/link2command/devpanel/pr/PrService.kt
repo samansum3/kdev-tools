@@ -135,28 +135,23 @@ object PrService {
         return Result.success(log.toString().trim())
     }
 
-    fun updatePr(project: Project, setImg: Boolean = false): Result<String> {
+    fun updatePr(project: Project, prNumber: Int, setImg: Boolean = false): Result<String> {
         val workDir = project.basePath?.let { File(it) }
             ?: return Result.failure(RuntimeException("No project directory."))
 
         val log = StringBuilder()
 
-        // ── Git context ────────────────────────────────────────────────────
-        val branchResult = runCmd(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), workDir)
-        if (branchResult.exitCode != 0) return Result.failure(RuntimeException("Not in git repo"))
-        if (branchResult.stdout.trim() == "HEAD") return Result.failure(RuntimeException("Detached HEAD"))
-
         // ── Fetch PR ─────────────────────────────────────────────────────────
-        log.appendLine("Fetching PR...")
-        val prViewResult = runCmd(listOf("gh", "pr", "view", "--json", "number,body"), workDir)
+        log.appendLine("Fetching PR #$prNumber...")
+        val prViewResult =
+            runCmd(listOf("gh", "pr", "view", "$prNumber", "--json", "number,body"), workDir)
         if (prViewResult.exitCode != 0)
-            return Result.failure(RuntimeException("No open PR for branch"))
+            return Result.failure(RuntimeException("PR #$prNumber not found"))
         val prJson = try {
             JsonParser.parseString(prViewResult.stdout).asJsonObject
         } catch (e: Exception) {
             return Result.failure(RuntimeException("Failed to parse PR JSON"))
         }
-        val prNumber = prJson.get("number").asInt
         val prBody = prJson.get("body")?.takeIf { !it.isJsonNull }?.asString ?: ""
         log.appendLine("PR #$prNumber found")
 

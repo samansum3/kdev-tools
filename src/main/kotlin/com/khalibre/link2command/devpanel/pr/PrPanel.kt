@@ -712,7 +712,7 @@ class PrPanel(
     private fun doUpdatePr(pr: PullRequest, anchor: Component) {
         setStatus("Updating PR #${pr.number}…")
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = PrService.updatePr(project)
+            val result = PrService.updatePr(project, pr.number)
             SwingUtilities.invokeLater {
                 setStatus("")
                 if (result.isSuccess) {
