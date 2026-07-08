@@ -3,6 +3,7 @@ package com.khalibre.link2command.devpanel.pr
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.MessageType
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
@@ -613,9 +614,11 @@ class PrPanel(
                 add(makeActionButton("Checkout") { doCheckout(pr, repo) }.apply {
                     toolTipText = "Checkout this PR branch"
                 })
-                add(makeActionButton("Rebase") { doRebase(pr, repo) }.apply {
+                val rebaseButton = makeActionButton("Rebase") {}.apply {
                     toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
-                })
+                }
+                rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
+                add(rebaseButton)
                 add(makeActionButton("Update PR") { doUpdatePr(pr) }.apply {
                     toolTipText = "Update PR description, remove dependency text, add image, etc."
                 })
@@ -680,14 +683,26 @@ class PrPanel(
         }
     }
 
-    private fun doRebase(pr: PullRequest, repo: String) {
+    private fun doRebase(pr: PullRequest, anchor: Component) {
         setStatus("Rebasing ${pr.headRefName}…")
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.rebasePr(project, pr.headRefName, pr.baseRefName)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) setStatus("✓ Rebased ${pr.headRefName}") else setStatus(
-                    "✗ ${result.exceptionOrNull()?.message}"
-                )
+                setStatus("")
+                if (result.isSuccess) {
+                    CardUtils.showResultBalloon(
+                        "✓ Rebased <b>${pr.headRefName}</b>",
+                        anchor,
+                        MessageType.INFO
+                    )
+                } else {
+                    CardUtils.showResultBalloon(
+                        "✗ ${CardUtils.escHtml(result.exceptionOrNull()?.message ?: "Rebase failed")}",
+                        anchor,
+                        MessageType.ERROR
+                    )
+                }
+                refresh()
             }
         }
     }
