@@ -155,75 +155,9 @@ object CreatePrService {
         return "#$num"
     }
 
-    /**
-     * Cross-platform equivalent of the script's xclip check: reads an image straight off the
-     * system clipboard via AWT (works on macOS/Windows/Linux, no xclip dependency), and if one
-     * is present *and* a GH session token is configured, uploads it the same way the script
-     * does — via the `gh image` command, with GH_SESSION_TOKEN in its environment — and returns
-     * the same `<img>` markdown snippet. Returns null for "nothing to embed", never throws.
-     */
     private fun tryUploadClipboardImage(): String? {
-        val buffered = try {
-            readClipboardImage() ?: return null
-        } catch (_: Exception) {
-            return null
-        }
-
         val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() } ?: return null
-        val width = buffered.width
-        val height = buffered.height
-
-        val tmpFile = File.createTempFile("clipboard-", ".png")
-        return try {
-            ImageIO.write(buffered, "png", tmpFile)
-            val result = PrService.runCmd(
-                listOf("gh", "image", tmpFile.absolutePath),
-                env = mapOf("GH_SESSION_TOKEN" to token)
-            )
-            if (result.exitCode != 0) return null
-            val url = IMAGE_URL_RE.find(result.stdout)?.groupValues?.get(1) ?: return null
-            "<img width=\"$width\" height=\"$height\" alt=\"image\" src=\"$url\" />"
-        } catch (_: Exception) {
-            null
-        } finally {
-            tmpFile.delete()
-        }
-    }
-
-    private fun readClipboardImage(): BufferedImage? {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        val contents = clipboard.getContents(null) ?: return null
-
-        // 1. Standard Java image flavor (works for most GUI toolkits' native clipboard managers)
-        if (contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-            try {
-                val awtImage = contents.getTransferData(DataFlavor.imageFlavor) as? java.awt.Image
-                if (awtImage != null) {
-                    val buffered = BufferedImage(
-                        awtImage.getWidth(null),
-                        awtImage.getHeight(null),
-                        BufferedImage.TYPE_INT_ARGB
-                    )
-                    val g = buffered.createGraphics()
-                    g.drawImage(awtImage, 0, 0, null)
-                    g.dispose()
-                    return buffered
-                }
-            } catch (_: Exception) { /* fall through to raw-stream flavors */
-            }
-        }
-
-        // 2. Raw image/* stream flavor — this is what flameshot (and most X11 screenshot tools)
-        //    actually put on the clipboard; Java doesn't expose it as DataFlavor.imageFlavor.
-        val streamFlavor = contents.transferDataFlavors.firstOrNull {
-            it.mimeType.startsWith("image/", ignoreCase = true) &&
-                    it.representationClass == java.io.InputStream::class.java
-        } ?: return null
-
-        return try {
-            (contents.getTransferData(streamFlavor) as? java.io.InputStream)?.use { ImageIO.read(it) }
-        } catch (_: Exception) {
-            null
-        }
+        val uploaded = ClipboardImage.upload(token).getOrNull() ?: return null
+        return "<img width=\"${uploaded.width}\" height=\"${uploaded.height}\" alt=\"image\" src=\"${uploaded.url}\" />"
     }
 }

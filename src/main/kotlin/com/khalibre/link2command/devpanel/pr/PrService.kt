@@ -1,10 +1,12 @@
 package com.khalibre.link2command.devpanel.pr
 
+import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
 import com.khalibre.link2command.devpanel.config.DevConfig
 import java.io.File
+import java.net.URI
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -133,11 +135,134 @@ object PrService {
         return Result.success(log.toString().trim())
     }
 
-    fun updatePr(project: Project): Result<String> {
+    fun updatePr(project: Project, setImg: Boolean = false): Result<String> {
         val workDir = project.basePath?.let { File(it) }
-        val result = runCmd(listOf("bash", "-c", "update-pr"), workDir)
-        return if (result.exitCode == 0) Result.success(result.stdout)
-        else Result.failure(RuntimeException(result.stderr.ifBlank { "update-pr failed" }))
+            ?: return Result.failure(RuntimeException("No project directory."))
+
+        val log = StringBuilder()
+
+        // ── Git context ────────────────────────────────────────────────────
+        val branchResult = runCmd(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), workDir)
+        if (branchResult.exitCode != 0) return Result.failure(RuntimeException("Not in git repo"))
+        if (branchResult.stdout.trim() == "HEAD") return Result.failure(RuntimeException("Detached HEAD"))
+
+        // ── Fetch PR ─────────────────────────────────────────────────────────
+        log.appendLine("Fetching PR...")
+        val prViewResult = runCmd(listOf("gh", "pr", "view", "--json", "number,body"), workDir)
+        if (prViewResult.exitCode != 0)
+            return Result.failure(RuntimeException("No open PR for branch"))
+        val prJson = try {
+            JsonParser.parseString(prViewResult.stdout).asJsonObject
+        } catch (e: Exception) {
+            return Result.failure(RuntimeException("Failed to parse PR JSON"))
+        }
+        val prNumber = prJson.get("number").asInt
+        val prBody = prJson.get("body")?.takeIf { !it.isJsonNull }?.asString ?: ""
+        log.appendLine("PR #$prNumber found")
+
+        var newBody = prBody
+
+        // ── 1. Dependency cleanup (always first) ──────────────────────────────
+        val dependLine = prBody.lines().firstOrNull { it.contains("DEPEND ON #") }
+        if (dependLine != null) {
+            val parentPr = Regex("DEPEND ON #(\\d+)").find(dependLine)?.groupValues?.get(1)
+            if (parentPr != null) {
+                log.appendLine("Checking dependency #$parentPr...")
+                val state = runCmd(
+                    listOf(
+                        "gh",
+                        "pr",
+                        "view",
+                        parentPr,
+                        "--json",
+                        "state",
+                        "--jq",
+                        ".state"
+                    )
+                ).stdout.trim()
+                if (state == "MERGED") {
+                    log.appendLine("Removing resolved dependency...")
+                    newBody = newBody.lines()
+                        .filterNot { it.contains("DEPEND ON #$parentPr") }
+                        .dropWhile { it.isBlank() }   // matches script's `sed '/./,$!d'`
+                        .joinToString("\n")
+                    log.appendLine("✔ Dependency removed")
+                } else {
+                    log.appendLine("Dependency still active ($state)")
+                }
+            }
+        } else {
+            log.appendLine("No dependency found")
+        }
+
+        // ── 2. Clipboard image handling (single source of truth) ──────────────
+        if (ClipboardImage.hasImage()) {
+            val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() }
+                ?: return Result.failure(RuntimeException("GH_SESSION_TOKEN not set — add a GitHub session token in Config"))
+            val uploaded = ClipboardImage.upload(token).getOrElse {
+                return Result.failure(RuntimeException("Image upload failed"))
+            }
+            val imgTag = "<img alt=\"image\" src=\"${uploaded.url}\" />"
+
+            if (setImg) {
+                log.appendLine("Replacing images...")
+                newBody = newBody.replace(Regex("<img\\s[^>]*/?\\s*>"), "").trimEnd()
+                newBody = "$newBody\n$imgTag"
+                log.appendLine("✔ Images replaced")
+            } else {
+                log.appendLine("Appending clipboard image...")
+                newBody = "$newBody\n$imgTag"
+                log.appendLine("✔ Image appended")
+            }
+        } else if (setImg) {
+            return Result.failure(RuntimeException("--set-img used but no clipboard image found"))
+        }
+
+        // ── 3. No-op check ───────────────────────────────────────────────────
+        if (newBody == prBody) {
+            log.appendLine("No changes")
+            return Result.success(log.toString().trim())
+        }
+
+        // ── 4. Update PR via REST PATCH ────────────────────────────────────────
+        log.appendLine("Updating PR...")
+        val remoteResult = runCmd(listOf("git", "remote", "get-url", "upstream"), workDir)
+        if (remoteResult.exitCode != 0 || remoteResult.stdout.isBlank())
+            return Result.failure(RuntimeException("Cannot detect repo"))
+        val repo = remoteResult.stdout.trim()
+            .replace(Regex(".*github\\.com[:/]"), "")
+            .removeSuffix(".git")
+
+        val ghToken = runCmd(listOf("gh", "auth", "token")).stdout.trim()
+        if (ghToken.isBlank())
+            return Result.failure(RuntimeException("Failed to get gh auth token"))
+
+        return try {
+            val payloadJson = Gson().toJson(mapOf("body" to newBody))
+            val request = java.net.http.HttpRequest.newBuilder()
+                .uri(URI("https://api.github.com/repos/$repo/pulls/$prNumber"))
+                .header("Authorization", "Bearer $ghToken")
+                .header("Accept", "application/vnd.github+json")
+                .header("Content-Type", "application/json")
+                .method("PATCH", java.net.http.HttpRequest.BodyPublishers.ofString(payloadJson))
+                .build()
+            val response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() == 200) {
+                log.appendLine("✔ PR updated")
+                Result.success(log.toString().trim())
+            } else {
+                Result.failure(
+                    RuntimeException(
+                        "Update failed (${response.statusCode()}): ${
+                            response.body().take(200)
+                        }"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Update failed: ${e.message}"))
+        }
     }
 
     fun checkoutBranch(project: Project, branch: String): Result<String> {
