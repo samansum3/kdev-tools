@@ -619,9 +619,11 @@ class PrPanel(
                 }
                 rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
                 add(rebaseButton)
-                add(makeActionButton("Update PR") { doUpdatePr(pr) }.apply {
+                val updatePrButton = makeActionButton("Update PR") { }.apply {
                     toolTipText = "Update PR description, remove dependency text, add image, etc."
-                })
+                }
+                updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
+                add(updatePrButton)
             } else {
                 add(makeActionButton("Approve") { doApprovePr(pr, repo) })
                 if (hasMergePermission) {
@@ -707,14 +709,25 @@ class PrPanel(
         }
     }
 
-    private fun doUpdatePr(pr: PullRequest) {
-        setStatus("Running update-pr for #${pr.number}…")
+    private fun doUpdatePr(pr: PullRequest, anchor: Component) {
+        setStatus("Updating PR #${pr.number}…")
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.updatePr(project)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) setStatus("✓ PR #${pr.number} updated") else setStatus(
-                    "✗ ${result.exceptionOrNull()?.message}"
-                )
+                setStatus("")
+                if (result.isSuccess) {
+                    CardUtils.showResultBalloon(
+                        "✓ PR #${pr.number} updated",
+                        anchor,
+                        MessageType.INFO
+                    )
+                } else {
+                    CardUtils.showResultBalloon(
+                        "✗ ${CardUtils.escHtml(result.exceptionOrNull()?.message ?: "Update failed")}",
+                        anchor,
+                        MessageType.ERROR
+                    )
+                }
             }
         }
     }
