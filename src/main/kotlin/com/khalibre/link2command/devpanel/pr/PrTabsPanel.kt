@@ -4,10 +4,7 @@ import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.MessageType
-import com.intellij.openapi.ui.popup.Balloon
-import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.JBColor
-import com.intellij.ui.awt.RelativePoint
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.common.ProjectPaths
@@ -149,16 +146,7 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
         type: MessageType,
         listener: ((HyperlinkEvent) -> Unit)? = null
     ) {
-        JBPopupFactory.getInstance()
-            .createHtmlTextBalloonBuilder(html, type, listener?.let { l ->
-                javax.swing.event.HyperlinkListener { e -> l(e) }
-            })
-            .setFadeoutTime(7000)
-            .createBalloon()
-            .show(
-                RelativePoint(createPrButton, Point(createPrButton.width / 2, 0)),
-                Balloon.Position.above
-            )
+        CardUtils.showResultBalloon(html, createPrButton, type, listener)
     }
 
     init {

@@ -27,11 +27,35 @@ object CardUtils {
     private val ARROW_BADGE_GAP = JBUI.scale(4)        // arrow -> badge
 
     /**
+     * Shows an HTML status balloon anchored to [anchor] — used for action results (create PR,
+     * rebase, etc.) where you want a transient "✓/✗ ..." popup rather than a persistent status label.
+     */
+    fun showResultBalloon(
+        html: String,
+        anchor: Component,
+        type: MessageType,
+        listener: ((javax.swing.event.HyperlinkEvent) -> Unit)? = null
+    ) {
+        JBPopupFactory.getInstance()
+            .createHtmlTextBalloonBuilder(html, type, listener?.let { l ->
+                javax.swing.event.HyperlinkListener { e -> l(e) }
+            })
+            .setFadeoutTime(7000)
+            .createBalloon()
+            .show(RelativePoint(anchor, Point(anchor.width / 2, 0)), Balloon.Position.above)
+    }
+
+    /**
      * Copies [text] to the system clipboard and confirms it with a small balloon that pops up
      * right at [anchorPoint] (in [anchor]'s own coordinate space) and fades out on its own after
      * about a second — used for "click a ticket key to copy it" and the "Copy link" button.
      */
-    fun copyToClipboardWithBalloon(text: String, anchor: Component, anchorPoint: Point, message: String) {
+    fun copyToClipboardWithBalloon(
+        text: String,
+        anchor: Component,
+        anchorPoint: Point,
+        message: String
+    ) {
         Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
         JBPopupFactory.getInstance()
             .createHtmlTextBalloonBuilder(message, MessageType.INFO, null)
@@ -155,7 +179,8 @@ object CardUtils {
         return JPanel(GridBagLayout()).apply {
             putClientProperty("ticketKey", ticketKey)
             putClientProperty("group", group)
-            border = if (ticketKey != null && ticketKey == selectedKeys[group]) selectedBorder else normalBorder
+            border =
+                if (ticketKey != null && ticketKey == selectedKeys[group]) selectedBorder else normalBorder
             alignmentX = Component.LEFT_ALIGNMENT
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             addMouseListener(object : MouseAdapter() {
