@@ -476,6 +476,7 @@ class PrPanel(
                     val info = mergeableMap[it.number]
                     it.mergeable = info?.mergeable ?: MergeableState.UNKNOWN
                     it.isOutdated = info?.isOutdated ?: false
+                    it.isBlocked = info?.isBlocked ?: false
                 }
                 SwingUtilities.invokeLater {
                     lastLoadedPrs = prs
@@ -579,7 +580,13 @@ class PrPanel(
                         fg = Color(90, 50, 140)
                     )
                 )
-            }
+            } else if (pr.isBlocked) add(
+                makeBadge(
+                    "⛔ blocked", null,
+                    "Merging is blocked — required reviews or status checks haven't been satisfied",
+                    bg = Color(96, 67, 67), fg = Color(230, 150, 150)
+                )
+            )
             pr.labels.forEach { (name, color) -> add(makeLabelBadge(name, color)) }
         }
         gbc.gridy = 2; card.add(badgePanel, gbc)

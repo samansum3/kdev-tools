@@ -17,7 +17,7 @@ enum class ReviewState { AWAITING, APPROVED, CHANGES_REQUESTED, COMMENTED }
 
 data class PrReview(val author: String, val state: String)
 
-data class MergeInfo(val mergeable: MergeableState, val isOutdated: Boolean)
+data class MergeInfo(val mergeable: MergeableState, val isOutdated: Boolean, val isBlocked: Boolean)
 
 data class PullRequest(
     val number: Int,
@@ -31,7 +31,8 @@ data class PullRequest(
     val reviews: List<PrReview>,
     val url: String,
     var mergeable: MergeableState = MergeableState.UNKNOWN,
-    var isOutdated: Boolean = false
+    var isOutdated: Boolean = false,
+    var isBlocked: Boolean = false
 ) {
     val approvedBy: List<String>
         get() {
@@ -335,11 +336,16 @@ object PrService {
                             "CONFLICTING" -> MergeableState.CONFLICTING
                             else -> MergeableState.UNKNOWN
                         }
-                        val outdated = obj.get("mergeStateStatus")?.asString == "BEHIND"
-                        results[num] = MergeInfo(mergeable, outdated)
+                        val stateStatus = obj.get("mergeStateStatus")?.asString
+                        val outdated = stateStatus == "BEHIND"
+                        val blocked = stateStatus == "BLOCKED"
+                        results[num] = MergeInfo(mergeable, outdated, blocked)
                     }
                 } catch (e: Exception) {
-                    results[num] = MergeInfo(MergeableState.UNKNOWN, false)
+                    results[num] = MergeInfo(MergeableState.UNKNOWN,
+                        isOutdated = false,
+                        isBlocked = false
+                    )
                 } finally {
                     latch.countDown()
                 }
