@@ -77,7 +77,7 @@ object CreatePrService {
         val parentPrRef = detectParentPrRef(workDir, branch)
 
         // ── Clipboard image ──────────────────────────────────────────────
-        val clipboardImageMarkdown = tryUploadClipboardImage()
+        val clipboardImageMarkdown = tryUploadClipboardImage(workDir)
 
         // ── Title & body ─────────────────────────────────────────────────
         val prTitle = "$ticketKey: $summary"
@@ -155,9 +155,9 @@ object CreatePrService {
         return "#$num"
     }
 
-    private fun tryUploadClipboardImage(): String? {
+    private fun tryUploadClipboardImage(workDir: File): String? {
         val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() } ?: return null
-        val uploaded = ClipboardImage.upload(token).getOrNull() ?: return null
+        val uploaded = ClipboardImage.upload(token, workDir).getOrNull() ?: return null
         return "<img width=\"${uploaded.width}\" height=\"${uploaded.height}\" alt=\"image\" src=\"${uploaded.url}\" />"
     }
 }

@@ -53,21 +53,33 @@ object ClipboardImage {
     }
 
     /** Uploads whatever's on the clipboard via `gh image` */
-    fun upload(sessionToken: String): Result<UploadedImage> {
+    fun upload(sessionToken: String, workDir: File? = null): Result<UploadedImage> {
         val buffered = read() ?: return Result.failure(RuntimeException("No image in clipboard"))
         val tmpFile = File.createTempFile("clipboard-", ".png")
         return try {
             ImageIO.write(buffered, "png", tmpFile)
             val result = PrService.runCmd(
                 listOf("gh", "image", tmpFile.absolutePath),
+                workDir = workDir,                                    // ← add this
                 env = mapOf("GH_SESSION_TOKEN" to sessionToken)
             )
-            if (result.exitCode != 0) return Result.failure(RuntimeException("Image upload failed"))
+            if (result.exitCode != 0)
+                return Result.failure(
+                    RuntimeException(
+                        "gh image exited ${result.exitCode}: ${
+                            result.stderr.ifBlank { result.stdout }.take(300)
+                        }"
+                    )
+                )
             val url = IMAGE_URL_RE.find(result.stdout)?.groupValues?.get(1)
-                ?: return Result.failure(RuntimeException("Image upload failed — could not extract URL"))
+                ?: return Result.failure(
+                    RuntimeException(
+                        "gh image ran but no URL found in output: ${result.stdout.take(300)}"
+                    )
+                )
             Result.success(UploadedImage(buffered.width, buffered.height, url))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(RuntimeException("Exception during upload: ${e.message}"))
         } finally {
             tmpFile.delete()
         }

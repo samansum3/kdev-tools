@@ -194,8 +194,8 @@ object PrService {
         if (ClipboardImage.hasImage()) {
             val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() }
                 ?: return Result.failure(RuntimeException("GH_SESSION_TOKEN not set — add a GitHub session token in Config"))
-            val uploaded = ClipboardImage.upload(token).getOrElse {
-                return Result.failure(RuntimeException("Image upload failed"))
+            val uploaded = ClipboardImage.upload(token, workDir).getOrElse {
+                return Result.failure(RuntimeException("Image upload failed: ${it.message}"))
             }
             val imgTag = "<img alt=\"image\" src=\"${uploaded.url}\" />"
 
