@@ -1,5 +1,7 @@
 package com.khalibre.link2command.devpanel.tickets
 
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
 import com.khalibre.link2command.devpanel.config.DevConfig
@@ -39,6 +41,104 @@ data class TicketFilters(
 )
 
 object JiraService {
+    /**
+     * Creates a new Jira issue via REST POST. Pass [parentKey] + [subtaskTypeId] together for a
+     * subtask (issue type referenced by id, since that's what createmeta gives us); leave both
+     * null and pass [typeName] instead for a top-level ticket (issue type referenced by name,
+     * matching the existing project-wide type cache which only has names).
+     */
+    fun createTicket(
+        summary: String,
+        description: String,
+        parentKey: String?,
+        typeName: String?,
+        subtaskTypeId: String?
+    ): Result<String> {
+        val cfg = DevConfig.load()
+        val baseUrl = cfg.jira.base_url.trimEnd('/')
+        val projectKey = cfg.jira.project_key
+        if (baseUrl.isBlank() || projectKey.isBlank())
+            return Result.failure(RuntimeException("Jira base URL / project key not configured"))
+
+        val issueTypeField = JsonObject().apply {
+            when {
+                subtaskTypeId != null -> addProperty("id", subtaskTypeId)
+                !typeName.isNullOrBlank() -> addProperty("name", typeName)
+                else -> return Result.failure(RuntimeException("No issue type selected"))
+            }
+        }
+
+        val fields = JsonObject().apply {
+            add("project", JsonObject().apply { addProperty("key", projectKey) })
+            addProperty("summary", summary)
+            add("issuetype", issueTypeField)
+            if (!parentKey.isNullOrBlank()) add(
+                "parent",
+                JsonObject().apply { addProperty("key", parentKey) })
+            if (description.isNotBlank()) add("description", toAdf(description))
+        }
+        val payload = JsonObject().apply { add("fields", fields) }
+
+        return try {
+            val request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI("$baseUrl/rest/api/3/issue"))
+                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(Gson().toJson(payload)))
+                .build()
+            val response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() == 201) {
+                val key = JsonParser.parseString(response.body()).asJsonObject.get("key").asString
+                Result.success(key)
+            } else {
+                Result.failure(
+                    RuntimeException(
+                        "Create failed (${response.statusCode()}): ${
+                            response.body().take(300)
+                        }"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Create failed: ${e.message}"))
+        }
+    }
+
+    /** Wraps plain text into Jira's Atlassian Document Format (required for API v3's description
+     *  field) — one paragraph per blank-line-separated block, single newlines become hard breaks. */
+    private fun toAdf(text: String): JsonObject {
+        val paragraphs = text.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotBlank() }
+        val content = com.google.gson.JsonArray()
+        paragraphs.forEach { para ->
+            val paraContent = com.google.gson.JsonArray()
+            para.split("\n").forEachIndexed { idx, line ->
+                if (idx > 0) paraContent.add(JsonObject().apply {
+                    addProperty(
+                        "type",
+                        "hardBreak"
+                    )
+                })
+                if (line.isNotEmpty())
+                    paraContent.add(JsonObject().apply {
+                        addProperty(
+                            "type",
+                            "text"
+                        ); addProperty("text", line)
+                    })
+            }
+            content.add(JsonObject().apply {
+                addProperty("type", "paragraph"); add(
+                "content",
+                paraContent
+            )
+            })
+        }
+        return JsonObject().apply {
+            addProperty("type", "doc"); addProperty("version", 1); add("content", content)
+        }
+    }
 
     fun buildJql(filters: TicketFilters, currentUserEmail: String?): String {
         val clauses = mutableListOf<String>()
@@ -234,7 +334,8 @@ object JiraService {
             )
         return try {
             val root = JsonParser.parseString(result.stdout)
-            val item = if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
+            val item =
+                if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
             val summary = item.getAsJsonObject("fields").get("summary").asString.trim()
             if (summary.isBlank())
                 Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
