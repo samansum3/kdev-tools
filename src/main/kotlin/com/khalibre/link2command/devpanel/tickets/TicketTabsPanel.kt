@@ -2,8 +2,10 @@ package com.khalibre.link2command.devpanel.tickets
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.MessageType
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
+import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.common.ProjectPaths
 import java.awt.*
 import java.awt.event.*
@@ -127,7 +129,15 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun openNewTicketDialog() {
-        if (NewTicketDialog(project, state.selectedTabId).showAndGet()) refreshActive()
+        val dialog = NewTicketDialog(project, state.selectedTabId)
+        if (dialog.showAndGet()) {
+            CardUtils.showResultBalloon(
+                dialog.resultMessage ?: "✓ Ticket created",
+                newTicketButton,
+                MessageType.INFO
+            )
+            refreshActive()
+        }
     }
 
     // ── Tab lifecycle ────────────────────────────────────────────────────────
