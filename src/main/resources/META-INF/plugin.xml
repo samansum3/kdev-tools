@@ -1,11 +1,11 @@
 <idea-plugin>
-  <id>com.khalibre.terminal-link2command</id>
-  <name>Khalibre AIO</name>
+  <id>com.khalibre.tools</id>
+  <name>K-Tools</name>
   <version>1.1.0</version>
   <vendor>Khalibre</vendor>
 
   <description>
-    Khalibre AIO — PR tools, Jira ticket management, and shared dev config.
+    K-Tools — PR tools, Jira ticket management, and shared dev config.
     Also makes [r: command] links in terminal output clickable.
   </description>
 
@@ -16,15 +16,15 @@
 
     <!-- Existing terminal link feature -->
     <consoleFilterProvider
-      implementation="com.khalibre.link2command.TerminalFilterProvider"/>
+      implementation="com.khalibre.tools.TerminalFilterProvider"/>
 
     <!-- New Dev Panel tool window -->
     <toolWindow
-      id="Khalibre AIO"
+      id="K-Tools"
       anchor="right"
       secondary="false"
       canCloseContents="false"
-      factoryClass="com.khalibre.link2command.devpanel.DevPanelFactory"
+      factoryClass="com.khalibre.tools.devpanel.DevPanelFactory"
       icon="/icons/khalibre-logo.png"/>
 
   </extensions>

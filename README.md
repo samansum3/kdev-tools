@@ -15,11 +15,11 @@ Clicking it runs `new CW-123` in the active terminal tab.
 **Requirements:** JDK 17+, internet connection (first build downloads Gradle + WebStorm)
 
 ```bash
-cd terminal-link2command
+cd kdev-tools
 ./gradlew buildPlugin
 ```
 
-This produces: `build/distributions/terminal-link2command-1.0.0.zip`
+This produces: `build/distributions/kdev-tools-1.0.0.zip`
 
 **Install in WebStorm:**
 Settings → Plugins → ⚙️ → Install Plugin from Disk → select the .zip
