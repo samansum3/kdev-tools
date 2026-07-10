@@ -106,6 +106,44 @@ object JiraService {
         }
     }
 
+    /** Uploads [file] as an attachment on [ticketKey] via Jira's REST API (multipart/form-data,
+     *  `X-Atlassian-Token: no-check` required for CSRF bypass on this specific endpoint). */
+    fun uploadAttachment(ticketKey: String, file: File, filename: String): Result<String> {
+        val cfg = DevConfig.load()
+        val baseUrl = cfg.jira.base_url.trimEnd('/')
+        if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
+
+        return try {
+            val boundary = "----DevPanelBoundary${System.currentTimeMillis()}"
+            val header = "--$boundary\r\n" +
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\n" +
+                    "Content-Type: image/png\r\n\r\n"
+            val footer = "\r\n--$boundary--\r\n"
+            val bodyBytes = header.toByteArray() + file.readBytes() + footer.toByteArray()
+
+            val request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI("$baseUrl/rest/api/3/issue/$ticketKey/attachments"))
+                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("X-Atlassian-Token", "no-check")
+                .header("Content-Type", "multipart/form-data; boundary=$boundary")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(bodyBytes))
+                .build()
+            val response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+            if (response.statusCode() in 200..201) Result.success("Attached $filename to $ticketKey")
+            else Result.failure(
+                RuntimeException(
+                    "Attachment upload failed (${response.statusCode()}): ${
+                        response.body().take(200)
+                    }"
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Attachment upload failed: ${e.message}"))
+        }
+    }
+
     /** Wraps plain text into Jira's Atlassian Document Format (required for API v3's description
      *  field) — one paragraph per blank-line-separated block, single newlines become hard breaks. */
     private fun toAdf(text: String): JsonObject {
