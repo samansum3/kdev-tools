@@ -5,12 +5,14 @@ import java.net.HttpURLConnection
 import java.util.*
 
 object JiraAuth {
-    fun apply(conn: HttpURLConnection) {
+    fun basicHeaderValue(): String {
         val cfg = DevConfig.load()
-
         val auth = Base64.getEncoder()
             .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
+        return "Basic $auth"
+    }
 
-        conn.setRequestProperty("Authorization", "Basic $auth")
+    fun apply(conn: HttpURLConnection) {
+        conn.setRequestProperty("Authorization", basicHeaderValue())
     }
 }
