@@ -14,27 +14,24 @@ import com.intellij.ui.components.fields.ExtendableTextComponent
 import com.intellij.ui.components.fields.ExtendableTextField
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.ProjectPaths
-import java.awt.BorderLayout
-import java.awt.Dimension
-import java.awt.GridLayout
+import com.khalibre.link2command.devpanel.pr.ClipboardImage
+import java.awt.*
+import java.awt.datatransfer.DataFlavor
 import java.io.File
+import javax.imageio.ImageIO
 import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
-/**
- * "New ticket" dialog for a Tickets sub-tab. Creates either a top-level ticket (Parent blank)
- * or a subtask (Parent set), via [JiraService.createTicket].
- *
- * Remembers the last-used Parent/Type *per sub-tab* under
- * `.git/cw/tabs/<tabId>/new-ticket-parent` / `new-ticket-type` — mirroring how that tab's own
- * "parent tickets" filter is persisted. If nothing's remembered yet and the tab's "parent
- * tickets" filter currently holds exactly one key, that's used as the initial Parent value.
- */
 class NewTicketDialog(
     private val project: Project,
     private val tabId: String
 ) : DialogWrapper(project, true) {
+
+    /** Set after a successful create (once the dialog has closed with OK) so the caller can
+     *  show a result balloon — e.g. "✓ Created CW-123 (image attach failed: ...)" */
+    var resultMessage: String? = null
+        private set
 
     private val cwDir: File? = ProjectPaths.cwDir(project)
     private val tabDir: File? = cwDir?.let { TicketTabsStore.tabStateDir(it, tabId) }
@@ -48,17 +45,20 @@ class NewTicketDialog(
     private val summaryField = JBTextField()
     private val descriptionArea = JBTextArea(6, 40).apply { lineWrap = true; wrapStyleWord = true }
 
-    // Prefetched once so toggling Parent blank <-> non-blank swaps the combo instantly
-    // instead of re-hitting Jira on every keystroke.
-    private var regularTypeNames: List<String> = emptyList()
+    private var regularTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
+    private var subtaskTypeInfos: List<JiraMetaService.SubtaskTypeInfo> = emptyList()
     private var subtaskTypeIdByName: Map<String, String> = emptyMap()
+    private var currentIconUrlByName: Map<String, String> = emptyMap()
     private var metaLoaded = false
     private var rememberedTypeName: String? = null
+    private var busy = false
 
     init {
         title = "New Ticket"
         setOKButtonText("Create")
+        typeCombo.renderer = TypeCellRenderer()
         init()
+        updateOkEnabled() // disabled until Summary has text
         loadRememberedDefaults()
         loadTypeMeta()
 
@@ -66,6 +66,11 @@ class NewTicketDialog(
             override fun insertUpdate(e: DocumentEvent) = onParentChanged()
             override fun removeUpdate(e: DocumentEvent) = onParentChanged()
             override fun changedUpdate(e: DocumentEvent) = onParentChanged()
+        })
+        summaryField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = updateOkEnabled()
+            override fun removeUpdate(e: DocumentEvent) = updateOkEnabled()
+            override fun changedUpdate(e: DocumentEvent) = updateOkEnabled()
         })
     }
 
@@ -122,8 +127,6 @@ class NewTicketDialog(
         if (!rememberedParent.isNullOrBlank()) {
             parentField.text = rememberedParent
         } else {
-            // Nothing remembered — fall back to the tab's own "parent tickets" filter,
-            // but only when it's unambiguous (exactly one key).
             val keys = dir?.let { File(it, "parent-tickets") }?.takeIf { it.exists() }
                 ?.readLines()?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
             if (keys.size == 1) parentField.text = keys.first()
@@ -148,11 +151,11 @@ class NewTicketDialog(
 
         ApplicationManager.getApplication().executeOnPooledThread {
             JiraMetaCache.load(dir)
-            val regular = JiraMetaCache.current().types.map { it.name }
-                .ifEmpty { JiraMetaService.loadTypes(dir).map { it.name } }
+            val regular = JiraMetaCache.current().types.ifEmpty { JiraMetaService.loadTypes(dir) }
             val subtasks = JiraMetaService.loadSubtaskTypes(dir)
             SwingUtilities.invokeLater {
-                regularTypeNames = regular
+                regularTypeInfos = regular
+                subtaskTypeInfos = subtasks
                 subtaskTypeIdByName = subtasks.associate { it.name to it.id }
                 metaLoaded = true
                 rebuildTypeCombo()
@@ -163,9 +166,13 @@ class NewTicketDialog(
     private fun rebuildTypeCombo() {
         if (!metaLoaded) return
         val hasParent = parentField.text.isNotBlank()
-        val names = if (hasParent) subtaskTypeIdByName.keys.toList() else regularTypeNames
-        val previouslySelected = typeCombo.selectedItem as? String
+        val names =
+            if (hasParent) subtaskTypeInfos.map { it.name } else regularTypeInfos.map { it.name }
+        currentIconUrlByName =
+            if (hasParent) subtaskTypeInfos.associate { it.name to it.iconUrl }
+            else regularTypeInfos.associate { it.name to it.iconUrl }
 
+        val previouslySelected = typeCombo.selectedItem as? String
         typeCombo.removeAllItems()
         names.forEach { typeCombo.addItem(it) }
         typeCombo.isEnabled = names.isNotEmpty()
@@ -174,6 +181,46 @@ class NewTicketDialog(
             previouslySelected != null && previouslySelected in names -> previouslySelected
             rememberedTypeName != null && rememberedTypeName in names -> rememberedTypeName
             else -> names.firstOrNull()
+        }
+    }
+
+    /** Icon + name renderer, reusing the same cached icons TicketsPanel's type badges use. */
+    private inner class TypeCellRenderer : ListCellRenderer<String> {
+        private val label = JLabel()
+        override fun getListCellRendererComponent(
+            list: JList<out String>,
+            value: String?,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean
+        ): Component {
+            label.text = value ?: ""
+            label.icon = null
+            label.iconTextGap = 6
+            label.isOpaque = true
+            label.border = JBUI.Borders.empty(2, 4)
+            if (isSelected) {
+                label.background = list.selectionBackground; label.foreground =
+                    list.selectionForeground
+            } else {
+                label.background = list.background; label.foreground = list.foreground
+            }
+            if (value != null) {
+                val cached = JiraIconLoader.cachedIconOrNull(value, 16)
+                if (cached != null) {
+                    label.icon = cached
+                } else {
+                    currentIconUrlByName[value]?.takeIf { it.isNotBlank() }?.let { url ->
+                        JiraIconLoader.loadTypeIconAsync(
+                            project,
+                            value,
+                            url,
+                            16
+                        ) { typeCombo.repaint() }
+                    }
+                }
+            }
+            return label
         }
     }
 
@@ -199,23 +246,55 @@ class NewTicketDialog(
         }
 
         val summary = summaryField.text.trim()
-        val description = descriptionArea.text
+        val typedDescription = descriptionArea.text
         val parent = parentField.text.trim().uppercase().takeIf { it.isNotBlank() }
         val typeName = typeCombo.selectedItem as? String
         val subtaskId = if (parent != null) subtaskTypeIdByName[typeName] else null
 
         setBusy(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraService.createTicket(
+            // Only fall back to clipboard text/URL if Description was left empty.
+            val effectiveDescription =
+                typedDescription.ifBlank { clipboardFallbackDescription() ?: "" }
+
+            val createResult = JiraService.createTicket(
                 summary = summary,
-                description = description,
+                description = effectiveDescription,
                 parentKey = parent,
                 typeName = if (parent == null) typeName else null,
                 subtaskTypeId = subtaskId
             )
+
+            var successMessage: String? = null
+            var failureMessage: String? = null
+
+            createResult.onSuccess { newKey ->
+                successMessage = "✓ Created $newKey"
+                // Independent of description: if there's an image on the clipboard, attach it.
+                val image = try {
+                    ClipboardImage.read()
+                } catch (_: Exception) {
+                    null
+                }
+                if (image != null) {
+                    val tmp = File.createTempFile("subtask-image-", ".png")
+                    try {
+                        ImageIO.write(image, "png", tmp)
+                        JiraService.uploadAttachment(newKey, tmp, "screenshot.png").onFailure {
+                            successMessage += " (image attach failed: ${it.message})"
+                        }
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+            createResult.onFailure { failureMessage = it.message ?: "Failed to create ticket" }
+
             SwingUtilities.invokeLater {
                 setBusy(false)
-                result.onSuccess {
+                if (failureMessage != null) {
+                    setErrorText(failureMessage)
+                } else {
                     tabDir?.mkdirs()
                     if (parent != null) tabDir?.let {
                         File(
@@ -224,10 +303,21 @@ class NewTicketDialog(
                         ).writeText(parent)
                     }
                     typeName?.let { t -> tabDir?.let { File(it, "new-ticket-type").writeText(t) } }
+                    resultMessage = successMessage
                     super@NewTicketDialog.doOKAction() // closes the dialog with OK_EXIT_CODE
                 }
-                result.onFailure { e -> setErrorText(e.message ?: "Failed to create ticket") }
             }
+        }
+    }
+
+    private fun clipboardFallbackDescription(): String? {
+        return try {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            if (!clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) return null
+            (clipboard.getData(DataFlavor.stringFlavor) as? String)?.trim()
+                ?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -239,9 +329,14 @@ class NewTicketDialog(
         AllIcons.Process.Step_4
     )
 
-    private fun setBusy(busy: Boolean) {
+    private fun updateOkEnabled() {
+        isOKActionEnabled = !busy && summaryField.text.isNotBlank()
+    }
+
+    private fun setBusy(busyState: Boolean) {
+        busy = busyState
         spinTimer?.stop(); spinTimer = null
-        isOKActionEnabled = !busy
+        updateOkEnabled()
         parentField.isEnabled = !busy
         typeCombo.isEnabled = !busy && typeCombo.itemCount > 0
         summaryField.isEnabled = !busy
