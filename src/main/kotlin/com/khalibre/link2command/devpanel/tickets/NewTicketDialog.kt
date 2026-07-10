@@ -43,7 +43,7 @@ class NewTicketDialog(
     private val parentField = ExtendableTextField().apply { toolTipText = "e.g. CW-123" }
     private val typeCombo = ComboBox<String>()
     private val summaryField = JBTextField()
-    private val descriptionArea = JBTextArea(6, 40).apply { lineWrap = true; wrapStyleWord = true }
+    private val descriptionArea = JBTextArea(4, 40).apply { lineWrap = true; wrapStyleWord = true }
 
     private var regularTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
     private var subtaskTypeInfos: List<JiraMetaService.SubtaskTypeInfo> = emptyList()
@@ -74,17 +74,25 @@ class NewTicketDialog(
         })
     }
 
+    // Put Create button to right (Not recommended as it make inconsistent with other dialog actions)
+//    override fun createActions(): Array<Action> {
+//        return arrayOf(cancelAction, okAction)
+//    }
+
     override fun createCenterPanel(): JComponent {
         val topRow = JPanel(GridLayout(1, 2, 12, 0)).apply {
             add(labeledField("Parent ticket", parentField))
             add(labeledField("Type", typeCombo))
         }
+        val secondRow = JPanel(GridLayout(1, 1)).apply {
+            add(labeledField("Summary", summaryField))
+        }
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            preferredSize = Dimension(480, 320)
+            preferredSize = Dimension(480, 220)
             add(topRow)
             add(Box.createVerticalStrut(10))
-            add(labeledField("Summary", summaryField))
+            add(secondRow)
             add(Box.createVerticalStrut(10))
             add(labeledField("Description", JBScrollPane(descriptionArea)))
         }
