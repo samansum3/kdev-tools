@@ -8,6 +8,7 @@ import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.CardUtils
 import com.khalibre.link2command.devpanel.common.ProjectPaths
+import com.khalibre.link2command.devpanel.common.SubTabUtils
 import java.awt.*
 import java.awt.event.*
 import javax.swing.*
@@ -268,31 +269,9 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
     private fun rebuildStrip() {
         tabStripRow.removeAll()
         state.tabs.forEach { tab -> tabStripRow.add(buildTabPill(tab)) }
-        tabStripRow.add(buildAddButton())
+        tabStripRow.add(SubTabUtils.buildAddButton(::addTab))
         tabStripRow.revalidate()
         tabStripRow.repaint()
-    }
-
-    private fun buildAddButton(): JComponent {
-        val normalFg = JBUI.CurrentTheme.Label.disabledForeground()
-        val btn = JLabel("+").apply {
-            font = font.deriveFont(Font.BOLD, font.size + 1f)
-            foreground = normalFg
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = JBUI.Borders.empty(4, 12, 6, 4)
-            toolTipText = "Add tab"
-        }
-        btn.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = addTab()
-            override fun mouseEntered(e: MouseEvent) {
-                btn.foreground = Color(24, 95, 165)
-            }
-
-            override fun mouseExited(e: MouseEvent) {
-                btn.foreground = normalFg
-            }
-        })
-        return btn
     }
 
     /**
@@ -312,22 +291,15 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             border = JBUI.Borders.empty(0, 2, 0, 4)
         }
-        val closeLabel = JLabel("\u00D7").apply { // ×
-            font = font.deriveFont(font.size + 1f)
-            foreground = normalFg
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = JBUI.Borders.empty(0, 2, 0, 4)
-            toolTipText = if (state.tabs.size > 1) "Close tab" else "Can't close the last tab"
-        }
-
+        val closeButton = SubTabUtils.buildCloseButton { closeTab(tab.id) }
         val tabPanel = JPanel(BorderLayout()).apply {
             isOpaque = false
             border = CompoundBorder(
                 JBUI.Borders.customLine(if (isSelected) accent else transparent, 0, 0, 2, 0),
-                JBUI.Borders.empty(4, 6, 5, 4)
+                JBUI.Borders.empty(3, 6, 5, 2)
             )
             add(nameLabel, BorderLayout.CENTER)
-            add(closeLabel, BorderLayout.EAST)
+            add(closeButton, BorderLayout.EAST)
         }
 
         val selectListener = object : MouseAdapter() {
@@ -345,21 +317,6 @@ class PrTabsPanel(private val project: Project) : JPanel(BorderLayout(0, 0)) {
         }
         nameLabel.addMouseListener(selectListener)
         tabPanel.addMouseListener(selectListener)
-
-        closeLabel.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                closeTab(tab.id)
-            }
-
-            override fun mouseEntered(e: MouseEvent) {
-                closeLabel.foreground = if (isSelected) Color(163, 45, 45) else selectedFg
-            }
-
-            override fun mouseExited(e: MouseEvent) {
-                closeLabel.foreground = normalFg
-            }
-        })
-
         return tabPanel
     }
 
