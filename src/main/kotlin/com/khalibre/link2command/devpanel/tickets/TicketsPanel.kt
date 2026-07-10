@@ -1071,54 +1071,8 @@ class TicketsPanel(
      * Multi-callback icon loader keyed by type name → <typeName>.png disk cache.
      * Multiple callers for the same typeName all get notified when the icon resolves.
      */
-    fun loadTicketTypeIconAsync(
-        typeName: String,
-        url: String?,
-        size: Int,
-        onLoaded: (ImageIcon) -> Unit
-    ) {
-        // Already resolved
-        typeIconMemCache[typeName]?.let { icon ->
-            // Re-scale if needed (different size requests)
-            onLoaded(scaleIcon(icon, size)); return
-        }
-
-        // Queue the callback; if first caller, kick off the load
-        val callbacks = typeIconCallbacks.getOrPut(typeName) { mutableListOf() }
-        callbacks += onLoaded
-        if (callbacks.size > 1) return  // load already in flight
-
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val cw = cwDir()
-            var img: ImageIcon? = null
-
-            if (cw != null) {
-                val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
-                if (cacheFile.exists()) img = loadAndScaleFile(cacheFile, size)
-            }
-
-            if (img == null && !url.isNullOrBlank()) {
-                img =
-                    CardUtils.fetchRemoteIcon(url, size, project.basePath?.let { File(it) }, false)
-                // Persist to named cache file
-                if (img != null && cw != null) {
-                    try {
-                        val cacheFile = JiraMetaService.typeIconCacheFile(cw, typeName)
-                        cacheFile.parentFile.mkdirs()
-                        val raw = ImageIO.read(java.net.URL(url))
-                        if (raw != null) ImageIO.write(raw, "png", cacheFile)
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-
-            val finalImg = img ?: return@executeOnPooledThread
-            typeIconMemCache[typeName] = finalImg
-
-            SwingUtilities.invokeLater {
-                typeIconCallbacks.remove(typeName)?.forEach { cb -> cb(scaleIcon(finalImg, size)) }
-            }
-        }
+    fun loadTicketTypeIconAsync(typeName: String, url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
+        JiraIconLoader.loadTypeIconAsync(project, typeName, url, size, onLoaded)
     }
 
     /**
