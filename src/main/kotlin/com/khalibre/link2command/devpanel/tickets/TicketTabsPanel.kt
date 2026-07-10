@@ -6,12 +6,7 @@ import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.khalibre.link2command.devpanel.common.ProjectPaths
 import java.awt.*
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
+import java.awt.event.*
 import javax.swing.*
 import javax.swing.border.CompoundBorder
 
@@ -76,14 +71,29 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    private val newTicketButton = JButton("New ticket", AllIcons.General.Add).apply {
+        toolTipText = "Create a new ticket or subtask"
+        isFocusPainted = false; isBorderPainted = false
+        border = JBUI.Borders.empty()
+        margin = JBUI.emptyInsets()
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        addActionListener { openNewTicketDialog() }
+    }
+
     init {
         val stripRowWrap = JPanel(BorderLayout()).apply {
             isOpaque = false
             // Compact: noticeably shorter than the main JBTabbedPane tabs above this one.
             maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(22))
             preferredSize = Dimension(preferredSize.width, JBUI.scale(22))
+
+            val eastControls = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
+                isOpaque = false
+                add(reloadButton)
+                add(newTicketButton)
+            }
             add(tabStripRow, BorderLayout.WEST)
-            add(reloadButton, BorderLayout.EAST)
+            add(eastControls, BorderLayout.EAST)
         }
         val separator = JPanel().apply {
             isOpaque = true
@@ -116,6 +126,10 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
         activeTicketsPanel()?.refresh()
     }
 
+    private fun openNewTicketDialog() {
+        if (NewTicketDialog(project, state.selectedTabId).showAndGet()) refreshActive()
+    }
+
     // ── Tab lifecycle ────────────────────────────────────────────────────────
 
     private fun panelFor(tabId: String): TicketsPanel =
@@ -143,7 +157,8 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun addTab() {
-        val newTab = TicketTabConfig(TicketTabsStore.newTabId(), TicketTabsStore.nextTabName(state.tabs))
+        val newTab =
+            TicketTabConfig(TicketTabsStore.newTabId(), TicketTabsStore.nextTabName(state.tabs))
         state = state.copy(tabs = state.tabs + newTab, selectedTabId = newTab.id)
         persist()
         rebuildStrip()
@@ -173,7 +188,8 @@ class TicketTabsPanel(private val project: Project) : JPanel(BorderLayout()) {
             rebuildStrip() // revert visual to the old name
             return
         }
-        state = state.copy(tabs = state.tabs.map { if (it.id == tabId) it.copy(name = trimmed) else it })
+        state =
+            state.copy(tabs = state.tabs.map { if (it.id == tabId) it.copy(name = trimmed) else it })
         persist()
         rebuildStrip()
     }
