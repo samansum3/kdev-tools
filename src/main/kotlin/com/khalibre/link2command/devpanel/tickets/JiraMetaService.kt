@@ -159,6 +159,55 @@ object JiraMetaService {
         }
     }
 
+    data class SubtaskTypeInfo(val id: String, val name: String)
+
+    fun subtaskTypesCacheFile(cwDir: File) = File(cwDir, "jira-subtask-types.json")
+
+    /** Returns cached subtask-eligible issue types if available, otherwise fetches from Jira and caches. */
+    fun loadSubtaskTypes(cwDir: File): List<SubtaskTypeInfo> {
+        val cache = subtaskTypesCacheFile(cwDir)
+        if (cache.exists()) {
+            return try {
+                JsonParser.parseString(cache.readText()).asJsonArray.map {
+                    val obj = it.asJsonObject
+                    SubtaskTypeInfo(obj.get("id").asString, obj.get("name").asString)
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        return fetchAndCacheSubtaskTypes(cwDir)
+    }
+
+    /** Force-fetches from Jira's createmeta endpoint, overwrites cache, returns fresh list. */
+    fun fetchAndCacheSubtaskTypes(cwDir: File): List<SubtaskTypeInfo> {
+        return try {
+            val cfg = DevConfig.load()
+            val baseUrl = cfg.jira.base_url.trimEnd('/')
+            val project = cfg.jira.project_key
+            if (baseUrl.isBlank() || project.isBlank()) return emptyList()
+
+            val conn = openJiraConn(cfg, "$baseUrl/rest/api/3/issue/createmeta/$project/issuetypes")
+            if (conn.responseCode != 200) return emptyList()
+
+            val root =
+                JsonParser.parseString(conn.inputStream.bufferedReader().readText()).asJsonObject
+            val types = root.getAsJsonArray("issueTypes")?.mapNotNull { el ->
+                val obj = el.asJsonObject
+                if (obj.get("subtask")?.asBoolean != true) return@mapNotNull null
+                val id = obj.get("id")?.asString ?: return@mapNotNull null
+                val name = obj.get("name")?.asString ?: return@mapNotNull null
+                SubtaskTypeInfo(id, name)
+            } ?: emptyList()
+
+            cwDir.mkdirs()
+            subtaskTypesCacheFile(cwDir).writeText(gson.toJson(types))
+            types
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun openJiraConn(cfg: DevConfig, url: String): HttpURLConnection {
