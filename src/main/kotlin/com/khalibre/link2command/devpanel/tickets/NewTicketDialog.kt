@@ -57,9 +57,9 @@ class NewTicketDialog(
         title = "New Ticket"
         setOKButtonText("Create")
         typeCombo.renderer = TypeCellRenderer()
+        loadRememberedDefaults()
         init()
         updateOkEnabled() // disabled until Summary has text
-        loadRememberedDefaults()
         loadTypeMeta()
 
         parentField.document.addDocumentListener(object : DocumentListener {
@@ -104,7 +104,13 @@ class NewTicketDialog(
             add(field, BorderLayout.CENTER)
         }
 
-    override fun getPreferredFocusedComponent(): JComponent = parentField
+    override fun getPreferredFocusedComponent(): JComponent {
+        return if (parentField.text.isBlank()) {
+            parentField
+        } else {
+            summaryField
+        }
+    }
 
     // ── Parent field: clear button + reactive type-list switch ─────────────
 
