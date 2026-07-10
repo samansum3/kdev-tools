@@ -159,7 +159,7 @@ object JiraMetaService {
         }
     }
 
-    data class SubtaskTypeInfo(val id: String, val name: String)
+    data class SubtaskTypeInfo(val id: String, val name: String, val iconUrl: String)
 
     fun subtaskTypesCacheFile(cwDir: File) = File(cwDir, "jira-subtask-types.json")
 
@@ -170,7 +170,11 @@ object JiraMetaService {
             return try {
                 JsonParser.parseString(cache.readText()).asJsonArray.map {
                     val obj = it.asJsonObject
-                    SubtaskTypeInfo(obj.get("id").asString, obj.get("name").asString)
+                    SubtaskTypeInfo(
+                        obj.get("id").asString,
+                        obj.get("name").asString,
+                        obj.get("iconUrl")?.asString ?: ""
+                    )
                 }
             } catch (_: Exception) {
                 emptyList()
@@ -197,7 +201,8 @@ object JiraMetaService {
                 if (obj.get("subtask")?.asBoolean != true) return@mapNotNull null
                 val id = obj.get("id")?.asString ?: return@mapNotNull null
                 val name = obj.get("name")?.asString ?: return@mapNotNull null
-                SubtaskTypeInfo(id, name)
+                val iconUrl = obj.get("iconUrl")?.asString?.let { fixIconUrl(it) } ?: ""
+                SubtaskTypeInfo(id, name, iconUrl)
             } ?: emptyList()
 
             cwDir.mkdirs()
