@@ -56,11 +56,12 @@ class TicketsPanel(
 
     private val assigneeUIService = AssigneeUIService(this)
 
-    private val clearSearchExtension = com.intellij.ui.components.fields.ExtendableTextComponent.Extension.create(
-        com.intellij.icons.AllIcons.Actions.Close,
-        com.intellij.icons.AllIcons.Actions.CloseHovered,
-        "Clear search"
-    ) { clearSearch() }
+    private val clearSearchExtension =
+        com.intellij.ui.components.fields.ExtendableTextComponent.Extension.create(
+            com.intellij.icons.AllIcons.Actions.Close,
+            com.intellij.icons.AllIcons.Actions.CloseHovered,
+            "Clear search"
+        ) { clearSearch() }
 
     private val searchField = com.intellij.ui.components.fields.ExtendableTextField().apply {
         toolTipText = "Search by summary or key..."; emptyText.text = "Search by summary or key..."
@@ -297,7 +298,10 @@ class TicketsPanel(
 
         val linkedKeys = linkedKeysField.text.split(",").map { it.trim().uppercase() }
             .filter { it.matches(Regex("[A-Z]+-[0-9]+")) }
-        if (linkedKeys.isNotEmpty()) File(dir, "linked-tickets").writeText(linkedKeys.joinToString("\n"))
+        if (linkedKeys.isNotEmpty()) File(
+            dir,
+            "linked-tickets"
+        ).writeText(linkedKeys.joinToString("\n"))
         else File(dir, "linked-tickets").delete()
 
         val ver = fixVersionField.text.trim()
@@ -754,8 +758,11 @@ class TicketsPanel(
         val isUnassigned = ticket.assigneeName == null
         val devTypes = DevConfig.load().ticket.developmentTypes.toSet()
         val isEligibleType = devTypes.isEmpty() || ticket.issueType in devTypes
-        if ((isUnassigned || ticket.status == "Failed QA") && isEligibleType)
-            panel.add(CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key) })
+        if ((isUnassigned || ticket.status == "Failed QA") && isEligibleType) {
+            lateinit var pickBtn: JButton
+            pickBtn = CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key, pickBtn) }
+            panel.add(pickBtn)
+        }
         panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
 
         val compactMode = DevConfig.load().ticket.itemMode == "compact"
@@ -835,8 +842,9 @@ class TicketsPanel(
         val transitionButtons = mutableListOf<JButton>()
         transitions.forEach { (targetStatus, transitionName) ->
             val (bg, fg) = resolveStatusColors(targetStatus)
-            val btn = CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
-                performTransition(ticket.key, targetStatus, transitionButtons)
+            lateinit var btn: JButton
+            btn = CardUtils.makeTransitionButton(targetStatus, transitionName, bg, fg) {
+                performTransition(ticket.key, targetStatus, btn, transitionButtons)
             }
             transitionButtons += btn
             panel.add(btn)
@@ -877,7 +885,10 @@ class TicketsPanel(
                     r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
                 val content = rendererComp.preferredSize
                 val i = getInsets()
-                return Dimension(content.width + i.left + i.right, content.height + i.top + i.bottom)
+                return Dimension(
+                    content.width + i.left + i.right,
+                    content.height + i.top + i.bottom
+                )
             }
 
             override fun doLayout() {
@@ -978,7 +989,8 @@ class TicketsPanel(
 
         fun setEnabledState(e: Boolean) {
             combo.isEnabled = e
-            combo.cursor = Cursor.getPredefinedCursor(if (e) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR)
+            combo.cursor =
+                Cursor.getPredefinedCursor(if (e) Cursor.HAND_CURSOR else Cursor.DEFAULT_CURSOR)
             combo.repaint()
         }
 
@@ -1071,7 +1083,12 @@ class TicketsPanel(
      * Multi-callback icon loader keyed by type name → <typeName>.png disk cache.
      * Multiple callers for the same typeName all get notified when the icon resolves.
      */
-    fun loadTicketTypeIconAsync(typeName: String, url: String?, size: Int, onLoaded: (ImageIcon) -> Unit) {
+    fun loadTicketTypeIconAsync(
+        typeName: String,
+        url: String?,
+        size: Int,
+        onLoaded: (ImageIcon) -> Unit
+    ) {
         JiraIconLoader.loadTypeIconAsync(project, typeName, url, size, onLoaded)
     }
 
@@ -1123,7 +1140,8 @@ class TicketsPanel(
             priorityIconMemCache[priorityName] = finalImg
 
             SwingUtilities.invokeLater {
-                priorityIconCallbacks.remove(priorityName)?.forEach { cb -> cb(scaleIcon(finalImg, size)) }
+                priorityIconCallbacks.remove(priorityName)
+                    ?.forEach { cb -> cb(scaleIcon(finalImg, size)) }
             }
         }
     }
@@ -1165,15 +1183,21 @@ class TicketsPanel(
     // ── Transition helpers ────────────────────────────────────────────────────
 
     /**
-     * Disables every transition button on this card immediately (synchronously, before the
-     * network call even starts) so a user can't fire off a second transition while the first
-     * is still in flight. On success the card gets entirely rebuilt by [refresh] — fresh buttons,
-     * naturally re-enabled. On failure no rebuild happens, so we explicitly reset the card's
-     * buttons back to enabled here.
+     * Shows a spinner + disables the clicked transition button immediately (synchronously,
+     * before the network call even starts), and disables its sibling transition buttons on the
+     * same card too, so a user can't fire off a second transition while the first is still in
+     * flight. On success the card gets entirely rebuilt by [refresh] — fresh buttons, naturally
+     * re-enabled. On failure no rebuild happens, so we explicitly reset the card's buttons back
+     * to enabled here.
      */
-    private fun performTransition(key: String, targetStatus: String, cardButtons: List<JButton>) {
-        cardButtons.forEach { it.isEnabled = false }
-        setStatus("$key → $targetStatus…")
+    private fun performTransition(
+        key: String,
+        targetStatus: String,
+        clickedButton: JButton,
+        cardButtons: List<JButton>
+    ) {
+        val stopSpinner = CardUtils.startButtonSpinner(clickedButton)
+        cardButtons.forEach { if (it !== clickedButton) it.isEnabled = false }
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = if (targetStatus == "In Progress")
                 JiraService.transitionToInProgress(key)
@@ -1181,23 +1205,27 @@ class TicketsPanel(
                 JiraService.transitionTicket(key, targetStatus)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ $key → $targetStatus"); refresh()
+                    refresh()
                 } else {
-                    setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                    stopSpinner()
                     cardButtons.forEach { it.isEnabled = true }
+                    setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
                 }
             }
         }
     }
 
-    private fun doPickTicket(key: String) {
-        setStatus("$key: creating branch & transitioning…")
+    private fun doPickTicket(key: String, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = JiraService.pickTicket(project, key)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ $key: branch created, In Progress"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                    refresh()
+                } else {
+                    stopSpinner()
+                    setStatus("✗ ${result.exceptionOrNull()?.message?.take(60)}")
+                }
             }
         }
     }
