@@ -8,11 +8,11 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.fields.ExtendableTextComponent
 import com.intellij.ui.components.fields.ExtendableTextField
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.pr.ClipboardImage
 import java.awt.*
@@ -22,6 +22,68 @@ import javax.imageio.ImageIO
 import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.text.html.HTMLDocument
+import javax.swing.text.html.HTMLEditorKit
+import javax.swing.text.Element
+import javax.swing.text.StyleConstants
+import javax.swing.text.html.HTML
+
+/** Routes paste (Ctrl/Cmd+V, and right-click paste) on the rich-text description editor through
+ *  our own HTML sanitizing instead of Swing's default plain-text-only import: prefers any HTML
+ *  clipboard flavor (so bullets/bold/links survive), falling back to plain text wrapped into
+ *  paragraphs if that's all that's on the clipboard.
+ *
+ *  Inserts via `HTMLDocument.insertBeforeEnd(bodyElement, html)` rather than the lower-level
+ *  `HTMLEditorKit.insertHTML(doc, offset, html, popDepth, pushDepth, tag)` — the latter needs
+ *  exactly-right pop/push depth numbers to create real separate `<p>`/`<li>` elements, and gets
+ *  it wrong easily (silently merging everything into one run of inline text instead of separate
+ *  paragraphs/list items). `insertBeforeEnd` is the API Swing itself provides for appending a
+ *  well-formed HTML fragment as new children of an element, and handles the structure correctly. */
+private class HtmlPasteTransferHandler(private val pane: JEditorPane) : TransferHandler() {
+    override fun canImport(support: TransferSupport): Boolean =
+        JiraRichText.readHtmlFlavor(support.transferable) != null ||
+                support.isDataFlavorSupported(DataFlavor.stringFlavor)
+
+    override fun importData(support: TransferSupport): Boolean {
+        if (!canImport(support)) return false
+        val html = JiraRichText.readHtmlFlavor(support.transferable)?.let { JiraRichText.sanitizeForPaste(it) }
+            ?: readPlainText(support)?.let { JiraRichText.plainTextToHtmlFragment(it) }
+            ?: return false
+
+        return try {
+            val doc = pane.document as HTMLDocument
+            doc.insertBeforeEnd(findBodyElement(doc), html)
+            pane.caretPosition = doc.length
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** `HTMLDocument.getDefaultRootElement()` isn't guaranteed to *be* the body element (it can
+     *  be an implicit wrapper above it), so we search the tree for the element Swing actually
+     *  tagged as `<body>` rather than assume the root is it. */
+    private fun findBodyElement(doc: HTMLDocument): Element {
+        fun search(el: Element): Element? {
+            if (el.attributes.getAttribute(StyleConstants.NameAttribute) == HTML.Tag.BODY) return el
+            for (i in 0 until el.elementCount) {
+                search(el.getElement(i))?.let { return it }
+            }
+            return null
+        }
+        return search(doc.defaultRootElement) ?: doc.defaultRootElement
+    }
+
+    private fun readPlainText(support: TransferSupport): String? = try {
+        if (support.isDataFlavorSupported(DataFlavor.stringFlavor))
+            support.transferable.getTransferData(DataFlavor.stringFlavor) as? String
+        else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun colorToHex(c: Color): String = String.format("#%02x%02x%02x", c.red, c.green, c.blue)
 
 class NewTicketDialog(
     private val project: Project,
@@ -43,7 +105,18 @@ class NewTicketDialog(
     private val parentField = ExtendableTextField().apply { toolTipText = "e.g. CW-123" }
     private val typeCombo = ComboBox<String>()
     private val summaryField = JBTextField()
-    private val descriptionArea = JBTextArea(4, 40).apply { lineWrap = true; wrapStyleWord = true }
+    private val descriptionArea = JEditorPane("text/html", "<html><body></body></html>").apply {
+        isEditable = true
+        preferredSize = Dimension(400, 90)
+        val font = UIUtil.getLabelFont()
+        val fg = UIUtil.getLabelForeground()
+        (editorKit as HTMLEditorKit).styleSheet.addRule(
+            "body { font-family: '${font.family}'; font-size: ${font.size}pt; color: ${colorToHex(fg)}; }"
+        )
+        background = UIUtil.getTextFieldBackground()
+        foreground = fg
+        transferHandler = HtmlPasteTransferHandler(this)
+    }
 
     private var regularTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
     private var subtaskTypeInfos: List<JiraMetaService.SubtaskTypeInfo> = emptyList()
@@ -260,20 +333,22 @@ class NewTicketDialog(
         }
 
         val summary = summaryField.text.trim()
-        val typedDescription = descriptionArea.text
+        val typedDescriptionHtml = descriptionArea.text
         val parent = parentField.text.trim().uppercase().takeIf { it.isNotBlank() }
         val typeName = typeCombo.selectedItem as? String
         val subtaskId = if (parent != null) subtaskTypeIdByName[typeName] else null
 
         setBusy(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            // Only fall back to clipboard text/URL if Description was left empty.
-            val effectiveDescription =
-                typedDescription.ifBlank { clipboardFallbackDescription() ?: "" }
+            // Only fall back to clipboard text/HTML if Description was left empty.
+            val effectiveDescriptionHtml =
+                if (JiraRichText.isBlankHtml(typedDescriptionHtml))
+                    clipboardFallbackDescriptionHtml() ?: ""
+                else typedDescriptionHtml
 
             val createResult = JiraService.createTicket(
                 summary = summary,
-                description = effectiveDescription,
+                description = effectiveDescriptionHtml,
                 parentKey = parent,
                 typeName = if (parent == null) typeName else null,
                 subtaskTypeId = subtaskId
@@ -324,12 +399,16 @@ class NewTicketDialog(
         }
     }
 
-    private fun clipboardFallbackDescription(): String? {
+    private fun clipboardFallbackDescriptionHtml(): String? {
         return try {
             val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-            if (!clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) return null
-            (clipboard.getData(DataFlavor.stringFlavor) as? String)?.trim()
-                ?.takeIf { it.isNotBlank() }
+            val contents = clipboard.getContents(null) ?: return null
+            JiraRichText.readHtmlFlavor(contents)?.let { return JiraRichText.sanitizeForPaste(it) }
+            if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+                val text = (contents.getTransferData(DataFlavor.stringFlavor) as? String)?.trim()
+                if (!text.isNullOrBlank()) return JiraRichText.plainTextToHtmlFragment(text)
+            }
+            null
         } catch (_: Exception) {
             null
         }
@@ -355,6 +434,7 @@ class NewTicketDialog(
         typeCombo.isEnabled = !busy && typeCombo.itemCount > 0
         summaryField.isEnabled = !busy
         descriptionArea.isEnabled = !busy
+        descriptionArea.isEditable = !busy
         if (busy) {
             var frame = 0
             okAction.putValue(Action.NAME, "Creating…")
