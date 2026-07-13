@@ -144,8 +144,55 @@ object JiraService {
         }
     }
 
+    /** Matches a bare http(s) URL so it can be turned into a real ADF link instead of plain text. */
+    private val URL_REGEX = Regex("""https?://[^\s<>\[\]]+""")
+
+    private fun adfTextNode(text: String): JsonObject = JsonObject().apply {
+        addProperty("type", "text"); addProperty("text", text)
+    }
+
+    private fun adfLinkNode(text: String, href: String): JsonObject = JsonObject().apply {
+        addProperty("type", "text")
+        addProperty("text", text)
+        add("marks", com.google.gson.JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("type", "link")
+                add("attrs", JsonObject().apply { addProperty("href", href) })
+            })
+        })
+    }
+
+    /**
+     * Splits [line] into ADF text/link nodes, turning any bare http(s) URL into a proper Jira
+     * link mark instead of plain text — so a link pasted (e.g. from the clipboard) into a new
+     * ticket's description shows up clickable instead of as inert text. Trailing punctuation
+     * right after a URL (closing paren/bracket, sentence-ending period, etc.) is kept as plain
+     * text rather than swallowed into the link, matching how link-autodetection usually treats
+     * trailing punctuation.
+     */
+    private fun lineToAdfNodes(line: String): List<JsonObject> {
+        val nodes = mutableListOf<JsonObject>()
+        var lastEnd = 0
+        for (match in URL_REGEX.findAll(line)) {
+            var url = match.value
+            var end = match.range.last + 1
+            while (url.isNotEmpty() && url.last() in ".,;:!?)]}\"'") {
+                url = url.dropLast(1); end--
+            }
+            if (url.isEmpty()) continue
+            val start = match.range.first
+            if (start > lastEnd) nodes.add(adfTextNode(line.substring(lastEnd, start)))
+            nodes.add(adfLinkNode(url, url))
+            lastEnd = end
+        }
+        if (lastEnd < line.length) nodes.add(adfTextNode(line.substring(lastEnd)))
+        if (nodes.isEmpty() && line.isNotEmpty()) nodes.add(adfTextNode(line))
+        return nodes
+    }
+
     /** Wraps plain text into Jira's Atlassian Document Format (required for API v3's description
-     *  field) — one paragraph per blank-line-separated block, single newlines become hard breaks. */
+     *  field) — one paragraph per blank-line-separated block, single newlines become hard breaks,
+     *  and any bare URL becomes a clickable link mark rather than plain text. */
     private fun toAdf(text: String): JsonObject {
         val paragraphs = text.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotBlank() }
         val content = com.google.gson.JsonArray()
@@ -158,13 +205,7 @@ object JiraService {
                         "hardBreak"
                     )
                 })
-                if (line.isNotEmpty())
-                    paraContent.add(JsonObject().apply {
-                        addProperty(
-                            "type",
-                            "text"
-                        ); addProperty("text", line)
-                    })
+                if (line.isNotEmpty()) lineToAdfNodes(line).forEach { paraContent.add(it) }
             }
             content.add(JsonObject().apply {
                 addProperty("type", "paragraph"); add(
