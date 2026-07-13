@@ -618,9 +618,12 @@ class PrPanel(
             add(copyLinkBtn)
 
             if (isAuthor) {
-                add(makeActionButton("Checkout") { doCheckout(pr, repo) }.apply {
-                    toolTipText = "Checkout this PR branch"
-                })
+                lateinit var checkoutBtn: JButton
+                checkoutBtn =
+                    makeActionButton("Checkout") { doCheckout(pr, repo, checkoutBtn) }.apply {
+                        toolTipText = "Checkout this PR branch"
+                    }
+                add(checkoutBtn)
                 val rebaseButton = makeActionButton("Rebase") {}.apply {
                     toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
                 }
@@ -632,18 +635,32 @@ class PrPanel(
                 updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
                 add(updatePrButton)
             } else {
-                add(makeActionButton("Approve") { doApprovePr(pr, repo) })
+                lateinit var approveBtn: JButton
+                approveBtn = makeActionButton("Approve") { doApprovePr(pr, repo, approveBtn) }
+                add(approveBtn)
                 if (hasMergePermission) {
-                    add(makeActionButton("Approve + Merge") { doMergePr(pr, repo, true) }.apply {
-                        toolTipText = "Approve and merge in one step"
-                    })
+                    lateinit var approveMergeBtn: JButton
+                    approveMergeBtn =
+                        makeActionButton("Approve + Merge") {
+                            doMergePr(
+                                pr,
+                                repo,
+                                true,
+                                approveMergeBtn
+                            )
+                        }
+                            .apply { toolTipText = "Approve and merge in one step" }
+                    add(approveMergeBtn)
                 }
             }
 
             if (hasMergePermission) {
-                add(makeActionButton("Merge") { doMergePr(pr, repo, false) }.apply {
-                    toolTipText = "Merge this PR into ${pr.baseRefName}"
-                })
+                lateinit var mergeBtn: JButton
+                mergeBtn =
+                    makeActionButton("Merge") { doMergePr(pr, repo, false, mergeBtn) }.apply {
+                        toolTipText = "Merge this PR into ${pr.baseRefName}"
+                    }
+                add(mergeBtn)
             }
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
@@ -680,34 +697,33 @@ class PrPanel(
         return "${names.take(1).joinToString(", ")} +${names.size - 1} more"
     }
 
-    private fun doCheckout(pr: PullRequest, repo: String) {
-        setStatus("Checking out ${pr.headRefName}…")
+    private fun doCheckout(pr: PullRequest, repo: String, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.checkoutBranch(project, pr.headRefName)
             SwingUtilities.invokeLater {
-                if (result.isSuccess) setStatus("✓ Checked out ${pr.headRefName}") else setStatus(
-                    "✗ ${result.exceptionOrNull()?.message}"
-                )
+                stopSpinner()
+                if (!result.isSuccess) setStatus("✗ ${result.exceptionOrNull()?.message}")
             }
         }
     }
 
-    private fun doRebase(pr: PullRequest, anchor: Component) {
-        setStatus("Rebasing ${pr.headRefName}…")
+    private fun doRebase(pr: PullRequest, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.rebasePr(project, pr.headRefName, pr.baseRefName)
             SwingUtilities.invokeLater {
-                setStatus("")
+                stopSpinner()
                 if (result.isSuccess) {
                     CardUtils.showResultBalloon(
                         "✓ Rebased <b>${pr.headRefName}</b>",
-                        anchor,
+                        button,
                         MessageType.INFO
                     )
                 } else {
                     CardUtils.showResultBalloon(
                         "✗ ${CardUtils.escHtml(result.exceptionOrNull()?.message ?: "Rebase failed")}",
-                        anchor,
+                        button,
                         MessageType.ERROR
                     )
                 }
@@ -716,22 +732,22 @@ class PrPanel(
         }
     }
 
-    private fun doUpdatePr(pr: PullRequest, anchor: Component) {
-        setStatus("Updating PR #${pr.number}…")
+    private fun doUpdatePr(pr: PullRequest, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.updatePr(project, pr.number)
             SwingUtilities.invokeLater {
-                setStatus("")
+                stopSpinner()
                 if (result.isSuccess) {
                     CardUtils.showResultBalloon(
                         "✓ PR #${pr.number} updated",
-                        anchor,
+                        button,
                         MessageType.INFO
                     )
                 } else {
                     CardUtils.showResultBalloon(
                         "✗ ${CardUtils.escHtml(result.exceptionOrNull()?.message ?: "Update failed")}",
-                        anchor,
+                        button,
                         MessageType.ERROR
                     )
                 }
@@ -739,27 +755,32 @@ class PrPanel(
         }
     }
 
-    private fun doApprovePr(pr: PullRequest, repo: String) {
-        setStatus("Approving #${pr.number}…")
+    private fun doApprovePr(pr: PullRequest, repo: String, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.approvePr(repo, pr.number)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ Approved #${pr.number}"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message}")
+                    refresh()
+                } else {
+                    stopSpinner()
+                    setStatus("✗ ${result.exceptionOrNull()?.message}")
+                }
             }
         }
     }
 
-    private fun doMergePr(pr: PullRequest, repo: String, andApprove: Boolean) {
-        val label = if (andApprove) "Approving + merging" else "Merging"
-        setStatus("$label #${pr.number}…")
+    private fun doMergePr(pr: PullRequest, repo: String, andApprove: Boolean, button: JButton) {
+        val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = PrService.mergePr(repo, pr.number, andApprove)
             SwingUtilities.invokeLater {
                 if (result.isSuccess) {
-                    setStatus("✓ Merged #${pr.number}"); refresh()
-                } else setStatus("✗ ${result.exceptionOrNull()?.message}")
+                    refresh()
+                } else {
+                    stopSpinner()
+                    setStatus("✗ ${result.exceptionOrNull()?.message}")
+                }
             }
         }
     }
