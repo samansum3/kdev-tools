@@ -775,7 +775,12 @@ class TicketsPanel(
 
         if ((isUnassigned || ticket.status == "Failed QA") && isEligibleType) {
             lateinit var pickBtn: JButton
-            pickBtn = CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key, pickBtn) }
+            pickBtn = CardUtils.makeActionButton("Pick") {
+                doPickTicket(ticket.key, pickBtn)
+            }.apply {
+                toolTipText =
+                    "Assign to you, transition to In Progress, and create new branch from current branch"
+            }
             panel.add(pickBtn)
         }
 
