@@ -758,48 +758,49 @@ class TicketsPanel(
         val isUnassigned = ticket.assigneeName == null
         val devTypes = DevConfig.load().ticket.developmentTypes.toSet()
         val isEligibleType = devTypes.isEmpty() || ticket.issueType in devTypes
+        val compactMode = DevConfig.load().ticket.itemMode == "compact"
+
+        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
+
+        // Compact mode moves transitions into the status-badge dropdown (see
+        // buildStatusDropdownTrigger) and frees up the room a row of transition buttons
+        // used to take — that space goes to this "Copy link" button instead.
+        lateinit var copyLinkBtn: JButton
+        copyLinkBtn = CardUtils.makeActionButton("Copy link") {
+            CardUtils.copyToClipboardWithBalloon(
+                JiraService.ticketUrl(ticket.key), copyLinkBtn, "Link copied"
+            )
+        }
+        panel.add(copyLinkBtn)
+
         if ((isUnassigned || ticket.status == "Failed QA") && isEligibleType) {
             lateinit var pickBtn: JButton
             pickBtn = CardUtils.makeActionButton("Pick") { doPickTicket(ticket.key, pickBtn) }
             panel.add(pickBtn)
         }
-        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
 
-        val compactMode = DevConfig.load().ticket.itemMode == "compact"
-        if (compactMode) {
-            // Compact mode moves transitions into the status-badge dropdown (see
-            // buildStatusDropdownTrigger) and frees up the room a row of transition buttons
-            // used to take — that space goes to this "Copy link" button instead.
-            lateinit var copyLinkBtn: JButton
-            copyLinkBtn = CardUtils.makeActionButton("Copy link") {
-                CardUtils.copyToClipboardWithBalloon(
-                    JiraService.ticketUrl(ticket.key), copyLinkBtn, "Link copied"
-                )
-            }
-            panel.add(copyLinkBtn)
-            return
-        }
-
-        val cacheKey = transitionsCacheKey(ticket)
-        ensureTransitionsLoaded(ticket, cacheKey, onLoading = {
-            val loadingLabel = JBLabel("…").apply {
-                font = font.deriveFont(font.size - 1f)
-                foreground = JBUI.CurrentTheme.Label.disabledForeground()
-                border = JBUI.Borders.empty(0, 4)
-            }
-            panel.add(loadingLabel)
-            loadingLabel
-        }) { transitions, loadingLabel ->
-            loadingLabel?.let { panel.remove(it) }
-            renderTransitionButtons(panel, ticket, isMe, transitions)
-            panel.revalidate(); panel.repaint()
-            // Trigger height sync up the hierarchy
-            var p: Container? = panel.parent
-            while (p != null) {
-                if (p is JPanel && p.layout is GridBagLayout) {
-                    syncCardHeight(p); break
+        if (!compactMode) {
+            val cacheKey = transitionsCacheKey(ticket)
+            ensureTransitionsLoaded(ticket, cacheKey, onLoading = {
+                val loadingLabel = JBLabel("…").apply {
+                    font = font.deriveFont(font.size - 1f)
+                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                    border = JBUI.Borders.empty(0, 4)
                 }
-                p = p.parent
+                panel.add(loadingLabel)
+                loadingLabel
+            }) { transitions, loadingLabel ->
+                loadingLabel?.let { panel.remove(it) }
+                renderTransitionButtons(panel, ticket, isMe, transitions)
+                panel.revalidate(); panel.repaint()
+                // Trigger height sync up the hierarchy
+                var p: Container? = panel.parent
+                while (p != null) {
+                    if (p is JPanel && p.layout is GridBagLayout) {
+                        syncCardHeight(p); break
+                    }
+                    p = p.parent
+                }
             }
         }
     }
