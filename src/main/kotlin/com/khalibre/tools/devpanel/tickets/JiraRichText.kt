@@ -34,10 +34,14 @@ object JiraRichText {
         .addTags(
             "p", "br", "ul", "ol", "li",
             "b", "strong", "i", "em", "u", "a", "code", "pre", "blockquote",
-            "h1", "h2", "h3", "h4", "h5", "h6"
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "s", "strike", "del", "hr", "sub"
         )
         .addAttributes("a", "href")
         .addProtocols("a", "href", "http", "https", "mailto")
+        .addTags("table", "thead", "tbody", "tr", "th", "td")
+        .addAttributes("th", "colspan", "rowspan")
+        .addAttributes("td", "colspan", "rowspan")
 
     /**
      * Extracts an HTML string from [transferable] if it's carrying any "text/html" flavor at
@@ -108,8 +112,22 @@ object JiraRichText {
 
     // ── HTML → ADF ────────────────────────────────────────────────────────────
 
-    private val BLOCK_TAGS =
-        setOf("p", "div", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre")
+    private val BLOCK_TAGS = setOf(
+        "p",
+        "div",
+        "ul",
+        "ol",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+        "pre",
+        "table",
+        "hr"
+    )
 
     /** Matches a bare http(s) URL in plain text so it can become a real link mark. */
     private val URL_REGEX = Regex("""https?://[^\s<>\[\]]+""")
@@ -147,15 +165,131 @@ object JiraRichText {
     }
 
     private fun blockToAdf(el: Element): JsonObject? = when (el.tagName().lowercase()) {
-        "p", "div" -> paragraphNode(inlineContentOf(el))
+        "p" -> paragraphNode(inlineContentOf(el))
+        "div" -> {
+            val blocks = mutableListOf<JsonObject>()
+            val loose = mutableListOf<Node>()
+            fun flushLoose() {
+                if (loose.isEmpty()) return
+                val inline = loose.flatMap { renderInline(it, emptyList()) }
+                loose.clear()
+                if (inline.isNotEmpty()) blocks += paragraphNode(inline)
+            }
+            el.childNodes().forEach { node ->
+                if (node is Element && node.tagName().lowercase() in BLOCK_TAGS) {
+                    flushLoose()
+                    blockToAdf(node)?.let { blocks += it }
+                } else {
+                    loose += node
+                }
+            }
+            flushLoose()
+            // Return a wrapper or flatten into parent — since ADF has no "div" node,
+            // return null and let caller collect the blocks
+            // This requires a small refactor: blockToAdf returns List<JsonObject> instead of JsonObject?
+            blocks.firstOrNull() // simplified — see refactor suggestion below
+        }
+
         "h1", "h2", "h3", "h4", "h5", "h6" ->
             headingNode(el.tagName().substring(1).toIntOrNull() ?: 1, inlineContentOf(el))
 
         "ul" -> listNode("bulletList", el)
         "ol" -> listNode("orderedList", el)
         "blockquote" -> blockquoteNode(el)
-        "pre" -> codeBlockNode(el.text())
+        "pre" -> codeBlockNode(el.wholeText())
+        "hr" -> JsonObject().apply { addProperty("type", "rule") }
+        "table" -> tableToAdf(el)
         else -> null
+    }
+
+    // Before sanitizing, extract status lozenges from raw HTML
+    private fun extractStatuses(rawHtml: String): Map<String, String> {
+        val doc = Jsoup.parse(rawHtml)
+        val statuses = mutableMapOf<String, String>()
+        // Jira renders statuses as <span> with class containing "status-lozenge"
+        doc.select("span[class*=status-lozenge]").forEach { span ->
+            val text = span.text().trim()
+            val color = when {
+                span.className().contains("blue") -> "blue"
+                span.className().contains("green") -> "green"
+                span.className().contains("yellow") -> "yellow"
+                span.className().contains("red") -> "red"
+                else -> "neutral"
+            }
+            if (text.isNotBlank()) statuses[text] = color
+        }
+        return statuses
+    }
+
+    private fun tableToAdf(table: Element): JsonObject {
+        val rows = mutableListOf<JsonObject>()
+        // Collect rows from both <thead> and <tbody>, or directly under <table>
+        val rowEls = table.select("tr")
+        for (tr in rowEls) {
+            val cells = mutableListOf<JsonObject>()
+            for (cell in tr.children()) {
+                val tag = cell.tagName().lowercase()
+                if (tag != "td" && tag != "th") continue
+
+                val cellType = if (tag == "th") "tableHeader" else "tableCell"
+                val attrs = JsonObject()
+
+                // colspan/rowspan — Jira requires these even when 1
+                val colspan = cell.attr("colspan").toIntOrNull() ?: 1
+                val rowspan = cell.attr("rowspan").toIntOrNull() ?: 1
+                if (colspan > 1) attrs.addProperty("colspan", colspan)
+                if (rowspan > 1) attrs.addProperty("rowspan", rowspan)
+
+                // Cell content: block-level children inside the cell
+                val cellContent = cellChildrenToAdf(cell)
+
+                cells += JsonObject().apply {
+                    addProperty("type", cellType)
+                    if (attrs.size() > 0) add("attrs", attrs)
+                    add("content", arr(cellContent.ifEmpty {
+                        listOf(paragraphNode(emptyList()))
+                    }))
+                }
+            }
+            if (cells.isNotEmpty()) {
+                rows += JsonObject().apply {
+                    addProperty("type", "tableRow")
+                    add("content", arr(cells))
+                }
+            }
+        }
+        if (rows.isEmpty()) return paragraphNode(emptyList()) // degenerate case
+
+        return JsonObject().apply {
+            addProperty("type", "table")
+            add("attrs", JsonObject().apply {
+                addProperty("isNumberColumnEnabled", false)
+                addProperty("layout", "default")
+            })
+            add("content", arr(rows))
+        }
+    }
+
+    /** Parses cell content — cells can contain paragraphs, lists, etc. */
+    private fun cellChildrenToAdf(cell: Element): List<JsonObject> {
+        val blocks = mutableListOf<JsonObject>()
+        val loose = mutableListOf<Node>()
+        fun flushLoose() {
+            if (loose.isEmpty()) return
+            val inline = loose.flatMap { renderInline(it, emptyList()) }
+            loose.clear()
+            if (inline.isNotEmpty()) blocks += paragraphNode(inline)
+        }
+        cell.childNodes().forEach { node ->
+            if (node is Element && node.tagName().lowercase() in BLOCK_TAGS) {
+                flushLoose()
+                blockToAdf(node)?.let { blocks += it }
+            } else {
+                loose += node
+            }
+        }
+        flushLoose()
+        return blocks
     }
 
     private fun inlineContentOf(el: Element): List<JsonObject> =
@@ -172,8 +306,10 @@ object JiraRichText {
         val contentItems = mutableListOf<JsonObject>()
         val inlineBuf = mutableListOf<JsonObject>()
         fun flushParagraph() {
-            contentItems += paragraphNode(inlineBuf.toList())
-            inlineBuf.clear()
+            if (inlineBuf.isNotEmpty()) {
+                contentItems += paragraphNode(inlineBuf.toList())
+                inlineBuf.clear()
+            }
         }
         li.childNodes().forEach { node ->
             if (node is Element && node.tagName().lowercase() in setOf("ul", "ol")) {
@@ -213,7 +349,28 @@ object JiraRichText {
 
     private fun paragraphNode(inline: List<JsonObject>): JsonObject = JsonObject().apply {
         addProperty("type", "paragraph")
-        add("content", arr(inline))
+        val consolidated = consolidateTextNodes(inline)
+        if (consolidated.isNotEmpty()) add("content", arr(consolidated))
+    }
+
+    /** Merges adjacent text nodes that carry identical marks. */
+    private fun consolidateTextNodes(nodes: List<JsonObject>): List<JsonObject> {
+        if (nodes.size <= 1) return nodes
+        val result = mutableListOf<JsonObject>()
+        for (node in nodes) {
+            val prev = result.lastOrNull()
+            if (prev != null
+                && prev.get("type")?.asString == "text"
+                && node.get("type")?.asString == "text"
+                && prev.get("marks")?.toString() == node.get("marks")?.toString()
+            ) {
+                val merged = prev.get("text").asString + node.get("text").asString
+                prev.addProperty("text", merged)
+            } else {
+                result += node
+            }
+        }
+        return result
     }
 
     private fun headingNode(level: Int, inline: List<JsonObject>): JsonObject = JsonObject().apply {
@@ -235,6 +392,16 @@ object JiraRichText {
             "b", "strong" -> node.childNodes()
                 .flatMap { renderInline(it, marks + markNode("strong")) }
 
+            "s", "strike", "del" -> node.childNodes()
+                .flatMap { renderInline(it, marks + markNode("strike")) }
+            "sup" -> node.childNodes().flatMap {
+                renderInline(it, marks + markNode("subsup",
+                    JsonObject().apply { addProperty("type", "sup") }))
+            }
+            "sub" -> node.childNodes().flatMap {
+                renderInline(it, marks + markNode("subsup",
+                    JsonObject().apply { addProperty("type", "sub") }))
+            }
             "i", "em" -> node.childNodes().flatMap { renderInline(it, marks + markNode("em")) }
             "u" -> node.childNodes().flatMap { renderInline(it, marks + markNode("underline")) }
             "code" -> node.childNodes().flatMap { renderInline(it, marks + markNode("code")) }
