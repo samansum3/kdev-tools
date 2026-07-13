@@ -1,5 +1,6 @@
 package com.khalibre.tools.devpanel.common
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.ui.popup.Balloon
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -14,10 +15,12 @@ import java.awt.event.MouseEvent
 import java.io.File
 import java.net.HttpURLConnection
 import javax.imageio.ImageIO
+import javax.swing.Icon
 import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.Timer
 import javax.swing.border.CompoundBorder
 
 object CardUtils {
@@ -89,6 +92,51 @@ object CardUtils {
         }
     }
 
+    private val spinIcons = listOf(
+        AllIcons.Process.Step_1,
+        AllIcons.Process.Step_2,
+        AllIcons.Process.Step_3,
+        AllIcons.Process.Step_4,
+        AllIcons.Process.Step_5
+    )
+
+    /**
+     * Starts an animated "in progress" spinner on [button] and disables it, so a user can't
+     * trigger the same action twice while it's in flight. Works both for plain [JButton]s (spinner
+     * replaces/sits as the button's icon, to the left of its text) and for the custom hand-painted
+     * transition buttons from [makeTransitionButton] (spinner replaces the drawn arrow instead,
+     * via a client property the button's paintComponent looks for).
+     *
+     * Returns a stop function that restores the button's original icon/arrow and re-enables it.
+     * Call it once the operation finishes — on success this is usually right before a [refresh]
+     * rebuilds the card anyway (so it's a no-op visually), but it's needed on failure since the
+     * button and its listener stick around for a retry.
+     */
+    fun startButtonSpinner(button: JButton): () -> Unit {
+        val isTransitionButton = button.getClientProperty("cw.transitionButton") == true
+        val originalIcon = button.icon
+        var frame = 0
+
+        fun applyFrame(icon: Icon) {
+            if (isTransitionButton) button.putClientProperty("cw.spinnerIcon", icon) else button.icon =
+                icon
+            button.repaint()
+        }
+
+        applyFrame(spinIcons[0])
+        button.isEnabled = false
+        val timer = Timer(120) { applyFrame(spinIcons[frame++ % spinIcons.size]) }
+        timer.start()
+
+        return {
+            timer.stop()
+            if (isTransitionButton) button.putClientProperty("cw.spinnerIcon", null) else button.icon =
+                originalIcon
+            button.isEnabled = true
+            button.repaint()
+        }
+    }
+
     fun makeTransitionButton(
         targetStatus: String,
         tooltip: String? = null,
@@ -128,16 +176,23 @@ object CardUtils {
                     arcRadius
                 )
 
-                g2.color = arrowFg
-                g2.font = font
-                val fm = g2.fontMetrics
-                val arrowY = (height + fm.ascent - fm.descent) / 2
-                g2.drawString("→", ARROW_LEFT_PADDING, arrowY)
+                val spinnerIcon = getClientProperty("cw.spinnerIcon") as? Icon
+                if (spinnerIcon != null) {
+                    val iconY = (height - spinnerIcon.iconHeight) / 2
+                    spinnerIcon.paintIcon(this, g2, ARROW_LEFT_PADDING, iconY)
+                } else {
+                    g2.color = arrowFg
+                    g2.font = font
+                    val fm = g2.fontMetrics
+                    val arrowY = (height + fm.ascent - fm.descent) / 2
+                    g2.drawString("→", ARROW_LEFT_PADDING, arrowY)
+                }
 
                 g2.dispose()
                 super.paintComponent(g)
             }
         }
+        btn.putClientProperty("cw.transitionButton", true)
 
         btn.font = baseFont
         btn.foreground = fg
