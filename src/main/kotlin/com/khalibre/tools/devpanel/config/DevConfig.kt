@@ -38,10 +38,21 @@ data class TicketConfig(
     val itemMode: String = "compact"
 )
 
+data class TelegramConfig(
+    val chat_id: String = "",
+    val bot_token: String = ""
+)
+
+data class CalendarificConfig(
+    val api_key: String = ""
+)
+
 data class DevConfig(
     val git: GitConfig = GitConfig(),
     val jira: JiraConfig = JiraConfig(),
-    val ticket: TicketConfig = TicketConfig()
+    val ticket: TicketConfig = TicketConfig(),
+    val telegram: TelegramConfig = TelegramConfig(),
+    val calendarific: CalendarificConfig = CalendarificConfig()
 ) {
     companion object {
         private val CONFIG_FILE =

@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
+import com.khalibre.tools.devpanel.standup.StandupPreviewDialog
 
 class DevPanelFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
@@ -14,11 +15,15 @@ class DevPanelFactory : ToolWindowFactory {
         val tab = ContentFactory.getInstance().createContent(content, "", false)
         toolWindow.contentManager.addContent(tab)
 
-        // Refresh button in the tool window title bar
+        // Preview + send standup report to Telegram
         toolWindow.setTitleActions(listOf(object :
-            AnAction("Refresh", "Refresh current tab", AllIcons.Actions.Refresh) {
+            AnAction(
+                "Send Standup",
+                "Preview and send standup report to Telegram",
+                AllIcons.Actions.Show
+            ) {
             override fun actionPerformed(e: AnActionEvent) {
-                content.refreshCurrentTab()
+                StandupPreviewDialog(project).show()
             }
         }))
     }

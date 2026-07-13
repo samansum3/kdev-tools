@@ -28,6 +28,9 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val projectKeyField = JBTextField()
     private val emailField = JBTextField()
     private val apiTokenField = JBPasswordField()
+    private val telegramChatIdField = JBTextField()
+    private val telegramBotTokenField = JBPasswordField()
+    private val calendarificApiKeyField = JBPasswordField()
 
     private val statusLabel = JBLabel("").apply {
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
@@ -201,11 +204,24 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         rightCell(12, fieldLabel("API token"))
         leftCell(13, emailField)
         rightCell(13, apiTokenField)
-        fullRow(14, hint("Stored in ~/.config/devtools/config.json"))
+
+        // TELEGRAM
+        fullRow(14, sectionLabel("TELEGRAM"))
+        leftCell(15, fieldLabel("Chat id"))
+        rightCell(15, fieldLabel("Bot token"))
+        leftCell(16, telegramChatIdField)
+        rightCell(16, telegramBotTokenField)
+
+        // CALENDARIFIC
+        fullRow(17, sectionLabel("CALENDARIFIC"))
+        fullRow(18, fieldLabel("API key"))
+        fullRow(19, calendarificApiKeyField)
+
+        fullRow(20, hint("Stored in ~/.config/devtools/config.json"))
 
         // Spacer
         form.add(JPanel(), GridBagConstraints().apply {
-            gridx = 0; gridy = 15; gridwidth = 3
+            gridx = 0; gridy = 24; gridwidth = 3
             weighty = 1.0; fill = GridBagConstraints.BOTH
         })
 
@@ -286,6 +302,9 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         emailField.text = cfg.jira.email
         apiTokenField.text = cfg.jira.api_token
         statusLabel.text = ""
+        telegramChatIdField.text = cfg.telegram.chat_id
+        telegramBotTokenField.text = cfg.telegram.bot_token
+        calendarificApiKeyField.text = cfg.calendarific.api_key
 
         hasMergePermission.putClientProperty("active", cfg.git.can_merge)
         noMergePermission.putClientProperty("active", !cfg.git.can_merge)
@@ -309,8 +328,14 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
                 project_key = projectKeyField.text.trim().uppercase(),
                 email = emailField.text.trim(),
                 api_token = String(apiTokenField.password)
+            ),
+            telegram = TelegramConfig(
+                chat_id = telegramChatIdField.text.trim(),
+                bot_token = String(telegramBotTokenField.password)
+            ),
+            calendarific = CalendarificConfig(
+                api_key = String(calendarificApiKeyField.password)
             )
-            // ticket config preserved as-is
         )
         DevConfig.save(cfg)
         statusLabel.text = "  Saved ✓"
