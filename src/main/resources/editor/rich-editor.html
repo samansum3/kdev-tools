@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #1a1a1a;
+      --border: #d0d0d0;
+      --toolbar-bg: #f5f5f5;
+      --toolbar-hover: #e0e0e0;
+      --toolbar-active: #d0d0d0;
+      --focus: #4a9eff;
+      --code-bg: #f0f0f0;
+      --bq-border: #d0d0d0;
+    }
+
+    .dark {
+      --bg: #2b2d30;
+      --fg: #bbbbbb;
+      --border: #43454a;
+      --toolbar-bg: #313335;
+      --toolbar-hover: #3c3f41;
+      --toolbar-active: #4a4d51;
+      --focus: #4a9eff;
+      --code-bg: #383a3e;
+      --bq-border: #555;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      padding: 4px 6px;
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .toolbar button {
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 3px 7px;
+      line-height: 1.2;
+    }
+
+    .toolbar button:hover {
+      background: var(--toolbar-hover);
+    }
+
+    .toolbar button.active {
+      background: var(--toolbar-active);
+      border-color: var(--border);
+    }
+
+    .toolbar .sep {
+      width: 1px;
+      background: var(--border);
+      margin: 2px 4px;
+      align-self: stretch;
+    }
+
+    #editor {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 10px;
+      outline: none;
+      min-height: 60px;
+    }
+
+    #editor:empty::before {
+      content: 'Enter description...';
+      color: var(--fg);
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    #editor p {
+      margin: 4px 0;
+    }
+
+    #editor h1, #editor h2, #editor h3 {
+      margin: 8px 0 4px;
+    }
+
+    #editor h1 {
+      font-size: 1.6em;
+    }
+
+    #editor h2 {
+      font-size: 1.4em;
+    }
+
+    #editor h3 {
+      font-size: 1.2em;
+    }
+
+    #editor ul, #editor ol {
+      padding-left: 24px;
+      margin: 4px 0;
+    }
+
+    #editor li {
+      margin: 2px 0;
+    }
+
+    #editor blockquote {
+      border-left: 3px solid var(--bq-border);
+      padding-left: 12px;
+      margin: 6px 0;
+      opacity: 0.85;
+    }
+
+    #editor pre {
+      background: var(--code-bg);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      margin: 6px 0;
+      white-space: pre-wrap;
+    }
+
+    #editor code {
+      background: var(--code-bg);
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    #editor a {
+      color: var(--focus);
+      text-decoration: underline;
+    }
+
+    #editor hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 8px 0;
+    }
+
+    #editor s {
+      text-decoration: line-through;
+    }
+
+    #editor table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 6px 0;
+    }
+
+    #editor th, #editor td {
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    #editor th {
+      background: var(--toolbar-bg);
+      font-weight: 600;
+    }
+
+    /* Image base */
+    #editor img {
+      max-width: 100%;
+      height: auto;
+      cursor: pointer;
+    }
+
+    /* Image resize */
+    .img-resize-wrap {
+      display: inline-block;
+      position: relative;
+      line-height: 0;
+    }
+
+    .img-resize-wrap img {
+      display: block;
+    }
+
+    .img-resize-wrap.selected {
+      outline: 2px solid var(--focus);
+    }
+
+    .img-resize-handle {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      background: var(--focus);
+      border: 1px solid #fff;
+      border-radius: 1px;
+      z-index: 10;
+    }
+
+    .img-resize-handle.tl {
+      top: -4px;
+      left: -4px;
+      cursor: nwse-resize;
+    }
+
+    .img-resize-handle.tr {
+      top: -4px;
+      right: -4px;
+      cursor: nesw-resize;
+    }
+
+    .img-resize-handle.bl {
+      bottom: -4px;
+      left: -4px;
+      cursor: nesw-resize;
+    }
+
+    .img-resize-handle.br {
+      bottom: -4px;
+      right: -4px;
+      cursor: nwse-resize;
+    }
+
+    .img-resize-info {
+      position: absolute;
+      bottom: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<div class="toolbar">
+  <button data-cmd="bold" title="Bold"><b>B</b></button>
+  <button data-cmd="italic" title="Italic"><i>I</i></button>
+  <button data-cmd="underline" title="Underline"><u>U</u></button>
+  <button data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+  <div class="sep"></div>
+  <button data-cmd="insertUnorderedList" title="Bullet List">&#8226; List</button>
+  <button data-cmd="insertOrderedList" title="Ordered List">1. List</button>
+  <button data-cmd="blockquote" title="Blockquote">&#8220; Quote</button>
+  <button data-cmd="insertHorizontalRule" title="Horizontal Rule">&#8212;</button>
+  <div class="sep"></div>
+  <button data-cmd="h1" title="Heading 1">H1</button>
+  <button data-cmd="h2" title="Heading 2">H2</button>
+  <button data-cmd="h3" title="Heading 3">H3</button>
+</div>
+<div id="editor" contenteditable="true"></div>
+<script>
+  (function () {
+    console.log('[Editor] script running');
+    var editor = document.getElementById('editor');
+    var SIMPLE = ['bold', 'italic', 'underline', 'strikeThrough',
+      'insertUnorderedList', 'insertOrderedList', 'insertHorizontalRule'];
+
+    document.querySelector('.toolbar').addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) {
+        return;
+      }
+      e.preventDefault();
+      var cmd = btn.getAttribute('data-cmd');
+      if (SIMPLE.indexOf(cmd) >= 0) {
+        document.execCommand(cmd, false, null);
+      } else if (cmd === 'blockquote') {
+        document.execCommand('formatBlock', false, 'BLOCKQUOTE');
+      } else if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') {
+        document.execCommand('formatBlock', false, cmd.toUpperCase());
+      }
+      editor.focus();
+    });
+
+    // ── Paste cleanup ─────────────────────────────────────────────────
+    editor.addEventListener('paste', function () {
+      setTimeout(function () {
+        editor.querySelectorAll('[style]').forEach(function (el) {
+          el.removeAttribute('style');
+        });
+        editor.querySelectorAll('[class]').forEach(function (el) {
+          el.removeAttribute('class');
+        });
+        editor.querySelectorAll('script,style,meta,link').forEach(function (el) {
+          el.remove();
+        });
+        editor.querySelectorAll('span').forEach(function (s) {
+          var p = s.parentNode;
+          while (s.firstChild) {
+            p.insertBefore(s.firstChild, s);
+          }
+          p.removeChild(s);
+        });
+      }, 0);
+    });
+
+    // ── Image resize ──────────────────────────────────────────────────
+    var activeWrap = null;
+
+    editor.addEventListener('click', function (e) {
+      var img = e.target.closest('img');
+
+      if (!img) {
+        deselectImage();
+        return;
+      }
+
+      if (img.parentNode.classList && img.parentNode.classList.contains('img-resize-wrap')) {
+        return;
+      }
+
+      deselectImage();
+      selectImage(img);
+    });
+
+    function selectImage(img) {
+      var wrap = document.createElement('span');
+      wrap.className = 'img-resize-wrap selected';
+      wrap.contentEditable = 'false';
+      img.parentNode.insertBefore(wrap, img);
+      wrap.appendChild(img);
+
+      if (!img.getAttribute('width')) {
+        img.setAttribute('width', img.naturalWidth || img.offsetWidth);
+      }
+
+      ['tl', 'tr', 'bl', 'br'].forEach(function (pos) {
+        var h = document.createElement('span');
+        h.className = 'img-resize-handle ' + pos;
+        h.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          startResize(img, wrap, pos, e);
+        });
+        wrap.appendChild(h);
+      });
+
+      var info = document.createElement('span');
+      info.className = 'img-resize-info';
+      info.textContent = Math.round(img.offsetWidth) + ' \u00d7 ' + Math.round(img.offsetHeight);
+      wrap.appendChild(info);
+
+      activeWrap = wrap;
+    }
+
+    function deselectImage() {
+      if (!activeWrap) {
+        return;
+      }
+      var img = activeWrap.querySelector('img');
+      if (img && activeWrap.parentNode) {
+        activeWrap.parentNode.insertBefore(img, activeWrap);
+        activeWrap.parentNode.removeChild(activeWrap);
+      }
+      activeWrap = null;
+    }
+
+    function startResize(img, wrap, corner, startEvent) {
+      var startX = startEvent.clientX;
+      var startW = img.offsetWidth;
+      var startH = img.offsetHeight;
+      var ratio = startW / startH;
+      var info = wrap.querySelector('.img-resize-info');
+
+      function onMove(e) {
+        var dx = e.clientX - startX;
+        var newW;
+
+        switch (corner) {
+          case 'br':
+          case 'tr':
+            newW = Math.max(50, startW + dx);
+            break;
+          case 'bl':
+          case 'tl':
+            newW = Math.max(50, startW - dx);
+            break;
+        }
+
+        var newH = newW / ratio;
+
+        img.style.width = Math.round(newW) + 'px';
+        img.style.height = Math.round(newH) + 'px';
+        img.setAttribute('width', Math.round(newW));
+        img.setAttribute('height', Math.round(newH));
+
+        if (info) {
+          info.textContent = Math.round(newW) + ' \u00d7 ' + Math.round(newH);
+        }
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        deselectImage();
+      }
+      if ((e.key === 'Backspace' || e.key === 'Delete') && activeWrap) {
+        e.preventDefault();
+        var parent = activeWrap.parentNode;
+        parent.removeChild(activeWrap);
+        activeWrap = null;
+      }
+    });
+
+    var observer = new MutationObserver(function () {
+      if (activeWrap && !editor.contains(activeWrap)) {
+        activeWrap = null;
+      }
+    });
+    observer.observe(editor, {childList: true, subtree: true});
+
+    // ── Output sanitization ───────────────────────────────────────────
+    var ALLOWED = ['P', 'BR', 'UL', 'OL', 'LI', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL',
+      'A', 'CODE', 'PRE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+      'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'HR', 'IMG'];
+
+    function sanitize(node) {
+      var kids = Array.prototype.slice.call(node.childNodes);
+      for (var i = 0; i < kids.length; i++) {
+        var c = kids[i];
+        if (c.nodeType === 1) {
+          if (ALLOWED.indexOf(c.tagName) < 0) {
+            while (c.firstChild) {
+              node.insertBefore(c.firstChild, c);
+            }
+            node.removeChild(c);
+          } else {
+            var attrs = Array.prototype.slice.call(c.attributes);
+            for (var j = 0; j < attrs.length; j++) {
+              var n = attrs[j].name.toLowerCase();
+              if (c.tagName === 'A' && n === 'href') {
+                continue;
+              }
+              if ((c.tagName === 'TD' || c.tagName === 'TH') && (n === 'colspan' || n
+                  === 'rowspan')) {
+                continue;
+              }
+              if (c.tagName === 'IMG' && (n === 'src' || n === 'width' || n === 'height' || n
+                  === 'alt')) {
+                continue;
+              }
+              c.removeAttribute(attrs[j].name);
+            }
+            sanitize(c);
+          }
+        } else if (c.nodeType !== 3) {
+          node.removeChild(c);
+        }
+      }
+    }
+
+    // ── API for Kotlin bridge ─────────────────────────────────────────
+    window.getEditorHTML = function () {
+      if (activeWrap) {
+        var img = activeWrap.querySelector('img');
+        if (img && activeWrap.parentNode) {
+          activeWrap.parentNode.insertBefore(img, activeWrap);
+          activeWrap.parentNode.removeChild(activeWrap);
+        }
+        activeWrap = null;
+      }
+      var clone = editor.cloneNode(true);
+      clone.querySelectorAll('.img-resize-wrap').forEach(function (w) {
+        var i = w.querySelector('img');
+        if (i) {
+          w.parentNode.insertBefore(i, w);
+        }
+        w.parentNode.removeChild(w);
+      });
+      sanitize(clone);
+      return clone.innerHTML;
+    };
+
+    window.isEditorEmpty = function () {
+      return editor.textContent.trim().length === 0;
+    };
+
+    window.setTheme = function (isDark) {
+      document.body.classList.toggle('dark', isDark);
+    };
+
+    window.editorInit = function () {
+      console.log('[Editor] editorInit called, notifyKotlinReady:',
+          typeof window.notifyKotlinReady);
+      if (window.notifyKotlinReady) {
+        window.notifyKotlinReady();
+        console.log('[Editor] ready notification sent');
+      }
+    };
+
+    if (window.notifyKotlinReady) {
+      window.editorInit();
+    } else {
+      console.log('[Editor] waiting for bridge');
+    }
+  })();
+</script>
+</body>
+</html>

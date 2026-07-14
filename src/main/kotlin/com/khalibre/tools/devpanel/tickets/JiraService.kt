@@ -47,10 +47,15 @@ object JiraService {
      * subtask (issue type referenced by id, since that's what createmeta gives us); leave both
      * null and pass [typeName] instead for a top-level ticket (issue type referenced by name,
      * matching the existing project-wide type cache which only has names).
+     *
+     * [descriptionAdf] is an optional pre-built ADF document node (from TipTapToAdf). When null,
+     * [descriptionHtml] is used as a fallback and converted via JiraRichText.htmlToAdf().
+     * If both are null/blank, the ticket is created with no description.
      */
     fun createTicket(
         summary: String,
-        description: String,
+        descriptionAdf: JsonObject? = null,
+        descriptionHtml: String? = null,
         parentKey: String?,
         typeName: String?,
         subtaskTypeId: String?
@@ -69,6 +74,15 @@ object JiraService {
             }
         }
 
+        // Resolve description: prefer pre-built ADF, fall back to HTML→ADF conversion
+        val resolvedDescription: JsonObject? = when {
+            descriptionAdf != null -> descriptionAdf
+            !descriptionHtml.isNullOrBlank() && !JiraRichText.isBlankHtml(descriptionHtml) ->
+                JiraRichText.htmlToAdf(descriptionHtml)
+
+            else -> null
+        }
+
         val fields = JsonObject().apply {
             add("project", JsonObject().apply { addProperty("key", projectKey) })
             addProperty("summary", summary)
@@ -76,8 +90,8 @@ object JiraService {
             if (!parentKey.isNullOrBlank()) add(
                 "parent",
                 JsonObject().apply { addProperty("key", parentKey) })
-            if (!JiraRichText.isBlankHtml(description))
-                add("description", JiraRichText.htmlToAdf(description))
+            if (resolvedDescription != null)
+                add("description", resolvedDescription)
         }
         val payload = JsonObject().apply { add("fields", fields) }
 
