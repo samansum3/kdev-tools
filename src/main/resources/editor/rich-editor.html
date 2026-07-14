@@ -84,6 +84,63 @@
       align-self: stretch;
     }
 
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .link-dialog {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .link-dialog[hidden] {
+      display: none;
+    }
+
+    .link-dialog input {
+      flex: 1;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 4px 6px;
+      font-size: 12px;
+      outline: none;
+      min-width: 0;
+    }
+
+    .link-dialog input:focus {
+      border-color: var(--focus);
+    }
+
+    .link-dialog button {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 3px 9px;
+      white-space: nowrap;
+    }
+
+    .link-dialog button:hover {
+      background: var(--toolbar-hover);
+    }
+
+    #link-insert-btn {
+      background: var(--focus);
+      border-color: var(--focus);
+      color: #fff;
+    }
+
     #editor {
       flex: 1;
       overflow-y: auto;
@@ -260,19 +317,43 @@
 </head>
 <body>
 <div class="toolbar">
-  <button data-cmd="bold" title="Bold"><b>B</b></button>
-  <button data-cmd="italic" title="Italic"><i>I</i></button>
-  <button data-cmd="underline" title="Underline"><u>U</u></button>
-  <button data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+  <div class="toolbar-group" role="group" aria-label="History">
+    <button data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+  </div>
   <div class="sep"></div>
-  <button data-cmd="insertUnorderedList" title="Bullet List">&#8226; List</button>
-  <button data-cmd="insertOrderedList" title="Ordered List">1. List</button>
-  <button data-cmd="blockquote" title="Blockquote">&#8220; Quote</button>
-  <button data-cmd="insertHorizontalRule" title="Horizontal Rule">&#8212;</button>
+  <div class="toolbar-group" role="group" aria-label="Text formatting">
+    <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+    <button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+    <button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+    <button data-cmd="strikeThrough" title="Strikethrough (Ctrl+Shift+X)"><s>S</s></button>
+    <button data-cmd="removeFormat" title="Clear formatting (Ctrl+\)">Clear</button>
+  </div>
   <div class="sep"></div>
-  <button data-cmd="h1" title="Heading 1">H1</button>
-  <button data-cmd="h2" title="Heading 2">H2</button>
-  <button data-cmd="h3" title="Heading 3">H3</button>
+  <div class="toolbar-group" role="group" aria-label="Lists and structure">
+    <button data-cmd="insertUnorderedList" title="Bullet List (Ctrl+Shift+8)">&#8226; List</button>
+    <button data-cmd="insertOrderedList" title="Ordered List (Ctrl+Shift+7)">1. List</button>
+    <button data-cmd="outdent" title="Outdent (Shift+Tab)">Outdent</button>
+    <button data-cmd="indent" title="Indent (Tab)">Indent</button>
+    <button data-cmd="blockquote" title="Blockquote (Ctrl+Shift+9)">&#8220; Quote</button>
+    <button data-cmd="insertHorizontalRule" title="Horizontal Rule">&#8212;</button>
+  </div>
+  <div class="sep"></div>
+  <div class="toolbar-group" role="group" aria-label="Insert">
+    <button data-cmd="link" title="Insert/Edit Link (Ctrl+K)">Link</button>
+  </div>
+  <div class="sep"></div>
+  <div class="toolbar-group" role="group" aria-label="Headings">
+    <button data-cmd="h1" title="Heading 1 (Ctrl+Alt+1)">H1</button>
+    <button data-cmd="h2" title="Heading 2 (Ctrl+Alt+2)">H2</button>
+    <button data-cmd="h3" title="Heading 3 (Ctrl+Alt+3)">H3</button>
+  </div>
+</div>
+<div id="link-dialog" class="link-dialog" hidden>
+  <input id="link-url-input" type="text" placeholder="https://example.com" spellcheck="false">
+  <button id="link-insert-btn" type="button">Insert</button>
+  <button id="link-remove-btn" type="button" hidden>Remove</button>
+  <button id="link-cancel-btn" type="button">Cancel</button>
 </div>
 <div id="editor" contenteditable="true"></div>
 <script>
@@ -280,15 +361,14 @@
     console.log('[Editor] script running');
     var editor = document.getElementById('editor');
     var SIMPLE = ['bold', 'italic', 'underline', 'strikeThrough',
-      'insertUnorderedList', 'insertOrderedList', 'insertHorizontalRule'];
+      'insertUnorderedList', 'insertOrderedList', 'insertHorizontalRule',
+      'undo', 'redo', 'removeFormat', 'indent', 'outdent'];
 
-    document.querySelector('.toolbar').addEventListener('click', function (e) {
-      var btn = e.target.closest('button');
-      if (!btn) {
+    function runCommand(cmd) {
+      if (cmd === 'link') {
+        openLinkDialog();
         return;
       }
-      e.preventDefault();
-      var cmd = btn.getAttribute('data-cmd');
       if (SIMPLE.indexOf(cmd) >= 0) {
         document.execCommand(cmd, false, null);
       } else if (cmd === 'blockquote') {
@@ -297,6 +377,215 @@
         document.execCommand('formatBlock', false, cmd.toUpperCase());
       }
       editor.focus();
+    }
+
+    document.querySelector('.toolbar').addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) {
+        return;
+      }
+      e.preventDefault();
+      runCommand(btn.getAttribute('data-cmd'));
+    });
+
+    // ── Indent/outdent list items with Tab / Shift+Tab ─────────────────
+    function isInsideList(node) {
+      while (node && node !== editor) {
+        if (node.nodeType === 1 && node.tagName === 'LI') {
+          return true;
+        }
+        node = node.parentNode;
+      }
+      return false;
+    }
+
+    editor.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab') {
+        return;
+      }
+      var sel = window.getSelection();
+      if (sel.rangeCount && isInsideList(sel.getRangeAt(0).startContainer)) {
+        e.preventDefault();
+        document.execCommand(e.shiftKey ? 'outdent' : 'indent', false, null);
+      }
+    });
+
+    // ── Link insert/edit dialog ─────────────────────────────────────────
+    var linkDialog = document.getElementById('link-dialog');
+    var linkInput = document.getElementById('link-url-input');
+    var linkInsertBtn = document.getElementById('link-insert-btn');
+    var linkRemoveBtn = document.getElementById('link-remove-btn');
+    var linkCancelBtn = document.getElementById('link-cancel-btn');
+    var savedLinkRange = null;
+    var editingLink = null;
+
+    function getEnclosingLink(node) {
+      while (node && node !== editor) {
+        if (node.nodeType === 1 && node.tagName === 'A') {
+          return node;
+        }
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    function normalizeUrl(raw) {
+      var url = raw.trim();
+      if (!url) {
+        return '';
+      }
+      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+        return url;
+      }
+      if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(url)) {
+        return 'mailto:' + url;
+      }
+      return 'https://' + url;
+    }
+
+    function openLinkDialog() {
+      var sel = window.getSelection();
+      if (!sel.rangeCount) {
+        return;
+      }
+      var range = sel.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) {
+        return;
+      }
+
+      var anchor = getEnclosingLink(range.commonAncestorContainer);
+      if (anchor) {
+        editingLink = anchor;
+        var r = document.createRange();
+        r.selectNodeContents(anchor);
+        savedLinkRange = r;
+        linkInput.value = anchor.getAttribute('href') || '';
+        linkRemoveBtn.hidden = false;
+      } else {
+        editingLink = null;
+        savedLinkRange = range.cloneRange();
+        linkInput.value = '';
+        linkRemoveBtn.hidden = true;
+      }
+
+      linkDialog.hidden = false;
+      linkInput.focus();
+      linkInput.select();
+    }
+
+    function closeLinkDialog() {
+      linkDialog.hidden = true;
+      savedLinkRange = null;
+      editingLink = null;
+      editor.focus();
+    }
+
+    linkInsertBtn.addEventListener('click', function () {
+      var url = normalizeUrl(linkInput.value);
+      if (!url || !savedLinkRange) {
+        closeLinkDialog();
+        return;
+      }
+
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedLinkRange);
+
+      if (editingLink) {
+        editingLink.setAttribute('href', url);
+      } else if (savedLinkRange.collapsed) {
+        var a = document.createElement('a');
+        a.setAttribute('href', url);
+        a.textContent = url;
+        savedLinkRange.insertNode(a);
+        var after = document.createRange();
+        after.setStartAfter(a);
+        after.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(after);
+      } else {
+        document.execCommand('createLink', false, url);
+      }
+      closeLinkDialog();
+    });
+
+    linkRemoveBtn.addEventListener('click', function () {
+      if (editingLink) {
+        var parent = editingLink.parentNode;
+        while (editingLink.firstChild) {
+          parent.insertBefore(editingLink.firstChild, editingLink);
+        }
+        parent.removeChild(editingLink);
+      }
+      closeLinkDialog();
+    });
+
+    linkCancelBtn.addEventListener('click', closeLinkDialog);
+
+    linkInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        linkInsertBtn.click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeLinkDialog();
+      }
+    });
+
+    // Clicking an existing link opens the editor instead of navigating away
+    editor.addEventListener('click', function (e) {
+      var link = e.target.closest('a');
+      if (link && editor.contains(link)) {
+        e.preventDefault();
+        var r = document.createRange();
+        r.selectNodeContents(link);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        openLinkDialog();
+      }
+    });
+    editor.addEventListener('mousedown', function (e) {
+      if (e.target.closest('a')) {
+        e.preventDefault();
+      }
+    });
+
+    // ── Keyboard shortcuts for commands with no native browser binding ──
+    document.addEventListener('keydown', function (e) {
+      if (!(e.ctrlKey || e.metaKey)) {
+        return;
+      }
+      if (document.activeElement === linkInput) {
+        return;
+      }
+      if (document.activeElement !== editor && !editor.contains(document.activeElement)) {
+        return;
+      }
+
+      var key = e.key.toLowerCase();
+      if (key === 'k') {
+        e.preventDefault();
+        runCommand('link');
+      } else if (e.shiftKey && key === 'x') {
+        e.preventDefault();
+        runCommand('strikeThrough');
+      } else if (e.shiftKey && (key === '8' || key === '*')) {
+        e.preventDefault();
+        runCommand('insertUnorderedList');
+      } else if (e.shiftKey && (key === '7' || key === '&')) {
+        e.preventDefault();
+        runCommand('insertOrderedList');
+      } else if (e.shiftKey && (key === '9' || key === '(')) {
+        e.preventDefault();
+        runCommand('blockquote');
+      } else if (e.altKey && (key === '1' || key === '2' || key === '3')) {
+        e.preventDefault();
+        runCommand('h' + key);
+      } else if (key === '\\') {
+        e.preventDefault();
+        runCommand('removeFormat');
+      }
     });
 
     // ── Paste cleanup ─────────────────────────────────────────────────
@@ -428,6 +717,9 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         deselectImage();
+        if (!linkDialog.hidden) {
+          closeLinkDialog();
+        }
       }
       if ((e.key === 'Backspace' || e.key === 'Delete') && activeWrap) {
         e.preventDefault();
