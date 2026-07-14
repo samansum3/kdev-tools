@@ -141,6 +141,70 @@
       color: #fff;
     }
 
+    .style-dropdown {
+      position: relative;
+    }
+
+    #style-dropdown-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 108px;
+      justify-content: space-between;
+    }
+
+    #style-dropdown-btn .caret {
+      font-size: 9px;
+      opacity: 0.7;
+    }
+
+    .style-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      margin-top: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      min-width: 160px;
+      padding: 3px;
+      z-index: 20;
+    }
+
+    .style-menu[hidden] {
+      display: none;
+    }
+
+    .style-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      border-radius: 3px;
+      color: var(--fg);
+      cursor: pointer;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+
+    .style-menu button:hover {
+      background: var(--toolbar-hover);
+    }
+
+    .style-menu button.current {
+      background: var(--toolbar-active);
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h1 { font-size: 1.5em; font-weight: 600; }
+    .style-menu .style-opt-h2 { font-size: 1.35em; font-weight: 600; }
+    .style-menu .style-opt-h3 { font-size: 1.2em; font-weight: 600; }
+    .style-menu .style-opt-h4 { font-size: 1.1em; font-weight: 600; }
+    .style-menu .style-opt-h5 { font-size: 1em; font-weight: 600; }
+    .style-menu .style-opt-h6 { font-size: 0.9em; font-weight: 600; }
+
     #editor {
       flex: 1;
       overflow-y: auto;
@@ -160,7 +224,7 @@
       margin: 4px 0;
     }
 
-    #editor h1, #editor h2, #editor h3 {
+    #editor h1, #editor h2, #editor h3, #editor h4, #editor h5, #editor h6 {
       margin: 8px 0 4px;
     }
 
@@ -174,6 +238,18 @@
 
     #editor h3 {
       font-size: 1.2em;
+    }
+
+    #editor h4 {
+      font-size: 1.1em;
+    }
+
+    #editor h5 {
+      font-size: 1em;
+    }
+
+    #editor h6 {
+      font-size: 0.9em;
     }
 
     #editor ul, #editor ol {
@@ -317,6 +393,24 @@
 </head>
 <body>
 <div class="toolbar">
+  <div class="toolbar-group" role="group" aria-label="Text style">
+    <div class="style-dropdown" id="style-dropdown">
+      <button type="button" id="style-dropdown-btn" title="Text style (Ctrl+Alt+0-6)">
+        <span id="style-dropdown-label">Normal text</span>
+        <span class="caret">&#9662;</span>
+      </button>
+      <div class="style-menu" id="style-menu" hidden role="menu">
+        <button type="button" data-style="p" role="menuitem">Normal text</button>
+        <button type="button" class="style-opt-h1" data-style="h1" role="menuitem">Heading 1</button>
+        <button type="button" class="style-opt-h2" data-style="h2" role="menuitem">Heading 2</button>
+        <button type="button" class="style-opt-h3" data-style="h3" role="menuitem">Heading 3</button>
+        <button type="button" class="style-opt-h4" data-style="h4" role="menuitem">Heading 4</button>
+        <button type="button" class="style-opt-h5" data-style="h5" role="menuitem">Heading 5</button>
+        <button type="button" class="style-opt-h6" data-style="h6" role="menuitem">Heading 6</button>
+      </div>
+    </div>
+  </div>
+  <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="History">
     <button data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -341,12 +435,6 @@
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Insert">
     <button data-cmd="link" title="Insert/Edit Link (Ctrl+K)">Link</button>
-  </div>
-  <div class="sep"></div>
-  <div class="toolbar-group" role="group" aria-label="Headings">
-    <button data-cmd="h1" title="Heading 1 (Ctrl+Alt+1)">H1</button>
-    <button data-cmd="h2" title="Heading 2 (Ctrl+Alt+2)">H2</button>
-    <button data-cmd="h3" title="Heading 3 (Ctrl+Alt+3)">H3</button>
   </div>
 </div>
 <div id="link-dialog" class="link-dialog" hidden>
@@ -373,7 +461,9 @@
         document.execCommand(cmd, false, null);
       } else if (cmd === 'blockquote') {
         document.execCommand('formatBlock', false, 'BLOCKQUOTE');
-      } else if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') {
+      } else if (cmd === 'p') {
+        document.execCommand('formatBlock', false, 'P');
+      } else if (/^h[1-6]$/.test(cmd)) {
         document.execCommand('formatBlock', false, cmd.toUpperCase());
       }
       editor.focus();
@@ -381,11 +471,93 @@
 
     document.querySelector('.toolbar').addEventListener('click', function (e) {
       var btn = e.target.closest('button');
-      if (!btn) {
+      if (!btn || btn.hasAttribute('data-style')) {
         return;
       }
       e.preventDefault();
       runCommand(btn.getAttribute('data-cmd'));
+    });
+
+    // ── Text style dropdown (Normal, H1-H6) ─────────────────────────────
+    var styleDropdown = document.getElementById('style-dropdown');
+    var styleDropdownBtn = document.getElementById('style-dropdown-btn');
+    var styleDropdownLabel = document.getElementById('style-dropdown-label');
+    var styleMenu = document.getElementById('style-menu');
+    var STYLE_LABELS = {
+      p: 'Normal text', h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3',
+      h4: 'Heading 4', h5: 'Heading 5', h6: 'Heading 6'
+    };
+
+    function openStyleMenu() {
+      updateStyleMenuSelection();
+      styleMenu.hidden = false;
+    }
+
+    function closeStyleMenu() {
+      styleMenu.hidden = true;
+    }
+
+    function currentBlockStyle() {
+      var sel = window.getSelection();
+      if (!sel.rangeCount) {
+        return 'p';
+      }
+      var node = sel.getRangeAt(0).startContainer;
+      while (node && node !== editor) {
+        if (node.nodeType === 1 && STYLE_LABELS.hasOwnProperty(node.tagName.toLowerCase())) {
+          return node.tagName.toLowerCase();
+        }
+        node = node.parentNode;
+      }
+      return 'p';
+    }
+
+    function updateStyleMenuSelection() {
+      var style = currentBlockStyle();
+      styleDropdownLabel.textContent = STYLE_LABELS[style];
+      styleMenu.querySelectorAll('button').forEach(function (b) {
+        b.classList.toggle('current', b.getAttribute('data-style') === style);
+      });
+    }
+
+    styleDropdownBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (styleMenu.hidden) {
+        openStyleMenu();
+      } else {
+        closeStyleMenu();
+      }
+    });
+
+    styleMenu.addEventListener('click', function (e) {
+      var item = e.target.closest('button[data-style]');
+      if (!item) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      var style = item.getAttribute('data-style');
+      runCommand(style);
+      styleDropdownLabel.textContent = STYLE_LABELS[style];
+      closeStyleMenu();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!styleDropdown.contains(e.target)) {
+        closeStyleMenu();
+      }
+    });
+
+    document.addEventListener('selectionchange', function () {
+      if (!styleMenu.hidden) {
+        updateStyleMenuSelection();
+        return;
+      }
+      var sel = window.getSelection();
+      if (sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer)) {
+        styleDropdownLabel.textContent = STYLE_LABELS[currentBlockStyle()];
+      }
     });
 
     // ── Indent/outdent list items with Tab / Shift+Tab ─────────────────
@@ -579,7 +751,10 @@
       } else if (e.shiftKey && (key === '9' || key === '(')) {
         e.preventDefault();
         runCommand('blockquote');
-      } else if (e.altKey && (key === '1' || key === '2' || key === '3')) {
+      } else if (e.altKey && key === '0') {
+        e.preventDefault();
+        runCommand('p');
+      } else if (e.altKey && /^[1-6]$/.test(key)) {
         e.preventDefault();
         runCommand('h' + key);
       } else if (key === '\\') {
@@ -719,6 +894,9 @@
         deselectImage();
         if (!linkDialog.hidden) {
           closeLinkDialog();
+        }
+        if (!styleMenu.hidden) {
+          closeStyleMenu();
         }
       }
       if ((e.key === 'Backspace' || e.key === 'Delete') && activeWrap) {
