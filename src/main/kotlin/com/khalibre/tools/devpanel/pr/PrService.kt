@@ -3,6 +3,7 @@ package com.khalibre.tools.devpanel.pr
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
 import java.io.File
@@ -142,21 +143,22 @@ object PrService {
         val prNumber = pr.number
         val log = StringBuilder()
 
-        // ── Push ─────────────────────────────────────────────────────────
-        val targetBranch = pr.headRefName
-        val remote = getRemote(targetBranch)
-        val pushResult = runCmd(
-            listOf(
-                "git",
-                "push",
-                "--force-with-lease",
-                remote,
-                "${targetBranch}:${targetBranch}"
-            ),
-            workDir
-        )
-        if (pushResult.exitCode != 0)
-            return Result.failure(RuntimeException("Failed to push updates to #$prNumber"))
+        // ── Push in background ─────────────────────────────────────────────────────────
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val targetBranch = pr.headRefName
+            val remote = getRemote(targetBranch)
+
+            runCmd(
+                listOf(
+                    "git",
+                    "push",
+                    "--force-with-lease",
+                    remote,
+                    "$targetBranch:$targetBranch"
+                ),
+                workDir
+            )
+        }
 
         // ── Fetch PR ─────────────────────────────────────────────────────────
         log.appendLine("Fetching PR #$prNumber...")
