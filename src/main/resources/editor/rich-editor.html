@@ -141,24 +141,31 @@
       color: #fff;
     }
 
-    .style-dropdown {
+    .style-dropdown, .list-dropdown {
       position: relative;
     }
 
-    #style-dropdown-btn {
+    #style-dropdown-btn, #list-dropdown-btn {
       display: flex;
       align-items: center;
       gap: 6px;
-      min-width: 108px;
       justify-content: space-between;
     }
 
-    #style-dropdown-btn .caret {
+    #style-dropdown-btn {
+      min-width: 88px;
+    }
+
+    #list-dropdown-btn {
+      min-width: 52px;
+    }
+
+    #style-dropdown-btn .caret, #list-dropdown-btn .caret {
       font-size: 9px;
       opacity: 0.7;
     }
 
-    .style-menu {
+    .style-menu, .list-menu {
       position: absolute;
       top: 100%;
       left: 0;
@@ -172,11 +179,11 @@
       z-index: 20;
     }
 
-    .style-menu[hidden] {
+    .style-menu[hidden], .list-menu[hidden] {
       display: none;
     }
 
-    .style-menu button {
+    .style-menu button, .list-menu button {
       display: block;
       width: 100%;
       text-align: left;
@@ -189,21 +196,57 @@
       font-size: 12px;
     }
 
-    .style-menu button:hover {
+    .style-menu button:hover, .list-menu button:hover {
       background: var(--toolbar-hover);
     }
 
-    .style-menu button.current {
+    .style-menu button.current, .list-menu button.current {
       background: var(--toolbar-active);
       font-weight: 600;
     }
 
-    .style-menu .style-opt-h1 { font-size: 1.5em; font-weight: 600; }
-    .style-menu .style-opt-h2 { font-size: 1.35em; font-weight: 600; }
-    .style-menu .style-opt-h3 { font-size: 1.2em; font-weight: 600; }
-    .style-menu .style-opt-h4 { font-size: 1.1em; font-weight: 600; }
-    .style-menu .style-opt-h5 { font-size: 1em; font-weight: 600; }
-    .style-menu .style-opt-h6 { font-size: 0.9em; font-weight: 600; }
+    .list-menu button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .list-menu button .list-opt-icon {
+      display: inline-block;
+      width: 16px;
+      text-align: center;
+      opacity: 0.8;
+    }
+
+    .style-menu .style-opt-h1 {
+      font-size: 1.5em;
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h2 {
+      font-size: 1.35em;
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h3 {
+      font-size: 1.2em;
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h4 {
+      font-size: 1.1em;
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h5 {
+      font-size: 1em;
+      font-weight: 600;
+    }
+
+    .style-menu .style-opt-h6 {
+      font-size: 0.9em;
+      font-weight: 600;
+    }
 
     .color-dropdown, .table-dropdown {
       position: relative;
@@ -558,19 +601,25 @@
       </button>
       <div class="style-menu" id="style-menu" hidden role="menu">
         <button type="button" data-style="p" role="menuitem">Normal text</button>
-        <button type="button" class="style-opt-h1" data-style="h1" role="menuitem">Heading 1</button>
-        <button type="button" class="style-opt-h2" data-style="h2" role="menuitem">Heading 2</button>
-        <button type="button" class="style-opt-h3" data-style="h3" role="menuitem">Heading 3</button>
-        <button type="button" class="style-opt-h4" data-style="h4" role="menuitem">Heading 4</button>
-        <button type="button" class="style-opt-h5" data-style="h5" role="menuitem">Heading 5</button>
-        <button type="button" class="style-opt-h6" data-style="h6" role="menuitem">Heading 6</button>
+        <button type="button" class="style-opt-h1" data-style="h1" role="menuitem">Heading 1
+        </button>
+        <button type="button" class="style-opt-h2" data-style="h2" role="menuitem">Heading 2
+        </button>
+        <button type="button" class="style-opt-h3" data-style="h3" role="menuitem">Heading 3
+        </button>
+        <button type="button" class="style-opt-h4" data-style="h4" role="menuitem">Heading 4
+        </button>
+        <button type="button" class="style-opt-h5" data-style="h5" role="menuitem">Heading 5
+        </button>
+        <button type="button" class="style-opt-h6" data-style="h6" role="menuitem">Heading 6
+        </button>
       </div>
     </div>
   </div>
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="History">
-    <button data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
-    <button data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+    <button data-cmd="undo" title="Undo (Ctrl+Z)">↶</button>
+    <button data-cmd="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
   </div>
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Text formatting">
@@ -582,9 +631,30 @@
   </div>
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Lists and structure">
-    <button data-cmd="insertUnorderedList" title="Bullet List (Ctrl+Shift+8)">&#8226; List</button>
-    <button data-cmd="insertOrderedList" title="Ordered List (Ctrl+Shift+7)">1. List</button>
-    <button data-cmd="taskList" title="Task List">&#9745; Tasks</button>
+    <div class="list-dropdown" id="list-dropdown">
+      <button type="button" id="list-dropdown-btn" title="List type">
+        <span id="list-dropdown-label">List</span>
+        <span class="caret">&#9662;</span>
+      </button>
+      <div class="list-menu" id="list-menu" hidden role="menu">
+        <button type="button" data-list="none" role="menuitem">
+          <span class="list-opt-icon">&#8212;</span>
+          None
+        </button>
+        <button type="button" data-list="ul" role="menuitem">
+          <span class="list-opt-icon">&#8226;</span>
+          Bullet List
+        </button>
+        <button type="button" data-list="ol" role="menuitem">
+          <span class="list-opt-icon">1.</span>
+          Numbered List
+        </button>
+        <button type="button" data-list="task" role="menuitem">
+          <span class="list-opt-icon">&#9745;</span>
+          Task List
+        </button>
+      </div>
+    </div>
     <button data-cmd="outdent" title="Outdent (Shift+Tab)">Outdent</button>
     <button data-cmd="indent" title="Indent (Tab)">Indent</button>
     <button data-cmd="blockquote" title="Blockquote (Ctrl+Shift+9)">&#8220; Quote</button>
@@ -607,8 +677,6 @@
   </div>
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Insert">
-    <button data-cmd="link" title="Insert/Edit Link (Ctrl+K)">Link</button>
-    <button data-cmd="image" title="Insert Image">Image</button>
     <div class="table-dropdown" id="table-dropdown">
       <button type="button" id="table-btn" title="Insert table">Table</button>
       <div class="table-grid-popup" id="table-grid-popup" hidden>
@@ -616,6 +684,8 @@
         <div class="table-grid-label" id="table-grid-label">Insert table</div>
       </div>
     </div>
+    <button data-cmd="link" title="Insert/Edit Link (Ctrl+K)">Link</button>
+    <button data-cmd="image" title="Insert Image">Image</button>
   </div>
 </div>
 <input type="file" id="image-file-input" accept="image/*" hidden>
@@ -664,7 +734,7 @@
 
     document.querySelector('.toolbar').addEventListener('click', function (e) {
       var btn = e.target.closest('button');
-      if (!btn || btn.hasAttribute('data-style')) {
+      if (!btn || btn.hasAttribute('data-style') || btn.hasAttribute('data-list')) {
         return;
       }
       e.preventDefault();
@@ -750,6 +820,120 @@
       var sel = window.getSelection();
       if (sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer)) {
         styleDropdownLabel.textContent = STYLE_LABELS[currentBlockStyle()];
+      }
+      if (listMenu.hidden) {
+        updateListDropdownLabel();
+      }
+    });
+
+    // ── List type dropdown (None, Bullet, Numbered, Task) ───────────────
+    var listDropdown = document.getElementById('list-dropdown');
+    var listDropdownBtn = document.getElementById('list-dropdown-btn');
+    var listDropdownLabel = document.getElementById('list-dropdown-label');
+    var listMenu = document.getElementById('list-menu');
+    var LIST_LABELS = {
+      none: 'List',
+      ul: '<span class="list-opt-icon">&#8226;</span>&nbsp;List',
+      ol: '<span class="list-opt-icon">1.</span>&nbsp;List',
+      task: '<span class="list-opt-icon">&#9745;</span>&nbsp;List'
+    };
+
+    function currentListType() {
+      var sel = window.getSelection();
+      if (!sel.rangeCount) {
+        return 'none';
+      }
+      var node = sel.getRangeAt(0).startContainer;
+      var list = closestTag(node, 'UL') || closestTag(node, 'OL');
+      if (!list) {
+        return 'none';
+      }
+      if (list.tagName === 'OL') {
+        return 'ol';
+      }
+      return list.hasAttribute('data-tasklist') ? 'task' : 'ul';
+    }
+
+    function updateListDropdownLabel() {
+      var type = currentListType();
+      listDropdownLabel.innerHTML = LIST_LABELS[type];
+    }
+
+    function updateListMenuSelection() {
+      var type = currentListType();
+      listDropdownLabel.innerHTML = LIST_LABELS[type];
+      listMenu.querySelectorAll('button').forEach(function (b) {
+        b.classList.toggle('current', b.getAttribute('data-list') === type);
+      });
+    }
+
+    function openListMenu() {
+      updateListMenuSelection();
+      listMenu.hidden = false;
+    }
+
+    function closeListMenu() {
+      listMenu.hidden = true;
+    }
+
+    function selectListType(type) {
+      var current = currentListType();
+      editor.focus();
+      if (type === current) {
+        return;
+      }
+      if (type === 'none') {
+        if (current === 'task') {
+          toggleTaskList();
+          document.execCommand('insertUnorderedList', false, null);
+        } else if (current === 'ul') {
+          document.execCommand('insertUnorderedList', false, null);
+        } else if (current === 'ol') {
+          document.execCommand('insertOrderedList', false, null);
+        }
+      } else if (type === 'ul') {
+        if (current === 'task') {
+          toggleTaskList();
+        } else {
+          document.execCommand('insertUnorderedList', false, null);
+        }
+      } else if (type === 'ol') {
+        if (current === 'task') {
+          toggleTaskList();
+          document.execCommand('insertOrderedList', false, null);
+        } else {
+          document.execCommand('insertOrderedList', false, null);
+        }
+      } else if (type === 'task') {
+        toggleTaskList();
+      }
+      editor.focus();
+    }
+
+    listDropdownBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (listMenu.hidden) {
+        openListMenu();
+      } else {
+        closeListMenu();
+      }
+    });
+
+    listMenu.addEventListener('click', function (e) {
+      var item = e.target.closest('button[data-list]');
+      if (!item) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      selectListType(item.getAttribute('data-list'));
+      closeListMenu();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!listDropdown.contains(e.target)) {
+        closeListMenu();
       }
     });
 
@@ -1202,7 +1386,7 @@
     var textColorMenu = document.getElementById('text-color-menu');
     var highlightColorMenu = document.getElementById('highlight-color-menu');
     buildColorMenu(textColorMenu, TEXT_COLORS, 'Remove color', applyTextColor);
-    buildColorMenu(highlightColorMenu, HIGHLIGHT_COLORS, 'Remove highlight', applyHighlightColor);
+    buildColorMenu(highlightColorMenu, HIGHLIGHT_COLORS, 'Remove', applyHighlightColor);
 
     function wireColorDropdown(btnId, menuEl) {
       document.getElementById(btnId).addEventListener('click', function (e) {
@@ -1214,11 +1398,12 @@
         menuEl.hidden = !wasHidden;
       });
     }
+
     wireColorDropdown('text-color-btn', textColorMenu);
     wireColorDropdown('highlight-color-btn', highlightColorMenu);
 
-    // Close any open popup (style menu, color menus, table grid) on an outside click, and on
-    // Escape alongside the other dismissible UI already handled below.
+    // Close any open popup (style menu, list menu, color menus, table grid) on an outside click,
+    // and on Escape alongside the other dismissible UI already handled below.
     document.addEventListener('click', function (e) {
       if (!e.target.closest('.color-dropdown')) {
         textColorMenu.hidden = true;
@@ -1536,6 +1721,9 @@
         if (!styleMenu.hidden) {
           closeStyleMenu();
         }
+        if (!listMenu.hidden) {
+          closeListMenu();
+        }
         textColorMenu.hidden = true;
         highlightColorMenu.hidden = true;
         closeTableGridPopup();
@@ -1565,7 +1753,8 @@
      *  marks this editor actually produces, however it got onto the span. */
     function sanitizeSpanStyle(style) {
       var parts = [];
-      var colorMatch = /(?:^|;)\s*(?<!-)color:\s*(#[0-9a-fA-F]{6}|rgba?\([0-9.,\s]+\))/i.exec(style);
+      var colorMatch = /(?:^|;)\s*(?<!-)color:\s*(#[0-9a-fA-F]{6}|rgba?\([0-9.,\s]+\))/i.exec(
+        style);
       if (colorMatch) {
         parts.push('color: ' + colorMatch[1]);
       }
@@ -1594,11 +1783,11 @@
                 continue;
               }
               if ((c.tagName === 'TD' || c.tagName === 'TH') && (n === 'colspan' || n
-                  === 'rowspan')) {
+                === 'rowspan')) {
                 continue;
               }
               if (c.tagName === 'IMG' && (n === 'src' || n === 'width' || n === 'height' || n
-                  === 'alt')) {
+                === 'alt')) {
                 continue;
               }
               if (c.tagName === 'UL' && n === 'data-tasklist') {
@@ -1665,7 +1854,7 @@
 
     window.editorInit = function () {
       console.log('[Editor] editorInit called, notifyKotlinReady:',
-          typeof window.notifyKotlinReady);
+        typeof window.notifyKotlinReady);
       if (window.notifyKotlinReady) {
         window.notifyKotlinReady();
         console.log('[Editor] ready notification sent');
