@@ -630,6 +630,21 @@
     <button data-cmd="removeFormat" title="Clear formatting (Ctrl+\)">Clear</button>
   </div>
   <div class="sep"></div>
+  <div class="toolbar-group" role="group" aria-label="Color">
+    <div class="color-dropdown" id="text-color-dropdown">
+      <button type="button" id="text-color-btn" title="Text color">
+        A<span class="color-swatch-bar" id="text-color-swatch-bar"></span>
+      </button>
+      <div class="color-menu" id="text-color-menu" hidden role="menu"></div>
+    </div>
+    <div class="color-dropdown" id="highlight-color-dropdown">
+      <button type="button" id="highlight-color-btn" title="Highlight color">
+        &#9998;<span class="color-swatch-bar" id="highlight-color-swatch-bar"></span>
+      </button>
+      <div class="color-menu" id="highlight-color-menu" hidden role="menu"></div>
+    </div>
+  </div>
+  <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Lists and structure">
     <div class="list-dropdown" id="list-dropdown">
       <button type="button" id="list-dropdown-btn" title="List type">
@@ -659,21 +674,6 @@
     <button data-cmd="indent" title="Indent (Tab)">Indent</button>
     <button data-cmd="blockquote" title="Blockquote (Ctrl+Shift+9)">&#8220; Quote</button>
     <button data-cmd="insertHorizontalRule" title="Horizontal Rule">&#8212;</button>
-  </div>
-  <div class="sep"></div>
-  <div class="toolbar-group" role="group" aria-label="Color">
-    <div class="color-dropdown" id="text-color-dropdown">
-      <button type="button" id="text-color-btn" title="Text color">
-        A<span class="color-swatch-bar" id="text-color-swatch-bar"></span>
-      </button>
-      <div class="color-menu" id="text-color-menu" hidden role="menu"></div>
-    </div>
-    <div class="color-dropdown" id="highlight-color-dropdown">
-      <button type="button" id="highlight-color-btn" title="Highlight color">
-        &#9998;<span class="color-swatch-bar" id="highlight-color-swatch-bar"></span>
-      </button>
-      <div class="color-menu" id="highlight-color-menu" hidden role="menu"></div>
-    </div>
   </div>
   <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Insert">
