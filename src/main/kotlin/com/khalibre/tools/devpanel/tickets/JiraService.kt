@@ -41,6 +41,10 @@ data class TicketFilters(
     val notTypeFilter: Set<String> = emptySet()
 )
 
+data class JiraCreatedIssue(val key: String, val id: String)
+
+data class JiraAttachment(val id: String, val filename: String)
+
 object JiraService {
     /**
      * Creates a new Jira issue via REST POST. Pass [parentKey] + [subtaskTypeId] together for a
@@ -59,7 +63,7 @@ object JiraService {
         parentKey: String?,
         typeName: String?,
         subtaskTypeId: String?
-    ): Result<String> {
+    ): Result<JiraCreatedIssue> {
         val cfg = DevConfig.load()
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         val projectKey = cfg.jira.project_key
@@ -106,8 +110,10 @@ object JiraService {
             val response = java.net.http.HttpClient.newHttpClient()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() == 201) {
-                val key = JsonParser.parseString(response.body()).asJsonObject.get("key").asString
-                Result.success(key)
+                val body = JsonParser.parseString(response.body()).asJsonObject
+                val key = body.get("key").asString
+                val id = body.get("id").asString
+                Result.success(JiraCreatedIssue(key, id))
             } else {
                 Result.failure(
                     RuntimeException(
@@ -123,8 +129,15 @@ object JiraService {
     }
 
     /** Uploads [file] as an attachment on [ticketKey] via Jira's REST API (multipart/form-data,
-     *  `X-Atlassian-Token: no-check` required for CSRF bypass on this specific endpoint). */
-    fun uploadAttachment(ticketKey: String, file: File, filename: String): Result<String> {
+     *  `X-Atlassian-Token: no-check` required for CSRF bypass on this specific endpoint). Returns
+     *  the attachment's real Jira id (needed to reference it from an ADF `media` node) — not just
+     *  a human-readable message. */
+    fun uploadAttachment(
+        ticketKey: String,
+        file: File,
+        filename: String,
+        mimeType: String = "image/png"
+    ): Result<JiraAttachment> {
         val cfg = DevConfig.load()
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
@@ -133,7 +146,7 @@ object JiraService {
             val boundary = "----DevPanelBoundary${System.currentTimeMillis()}"
             val header = "--$boundary\r\n" +
                     "Content-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\n" +
-                    "Content-Type: image/png\r\n\r\n"
+                    "Content-Type: $mimeType\r\n\r\n"
             val footer = "\r\n--$boundary--\r\n"
             val bodyBytes = header.toByteArray() + file.readBytes() + footer.toByteArray()
 
@@ -147,8 +160,14 @@ object JiraService {
             val response = java.net.http.HttpClient.newHttpClient()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
 
-            if (response.statusCode() in 200..201) Result.success("Attached $filename to $ticketKey")
-            else Result.failure(
+            if (response.statusCode() in 200..201) {
+                val parsed = JsonParser.parseString(response.body())
+                val first = if (parsed.isJsonArray) parsed.asJsonArray.firstOrNull()?.asJsonObject
+                else parsed.asJsonObject
+                val id = first?.get("id")?.asString
+                if (id != null) Result.success(JiraAttachment(id, filename))
+                else Result.failure(RuntimeException("Attachment upload succeeded but no id in response"))
+            } else Result.failure(
                 RuntimeException(
                     "Attachment upload failed (${response.statusCode()}): ${
                         response.body().take(200)
@@ -157,6 +176,41 @@ object JiraService {
             )
         } catch (e: Exception) {
             Result.failure(RuntimeException("Attachment upload failed: ${e.message}"))
+        }
+    }
+
+    /** Overwrites [ticketKey]'s description with [descriptionAdf] via REST PUT — used to patch in
+     *  the final description (with real `media` references) after uploading embedded images,
+     *  since they can't be uploaded until the ticket — and its numeric id — exist. */
+    fun updateDescription(ticketKey: String, descriptionAdf: JsonObject): Result<Unit> {
+        val cfg = DevConfig.load()
+        val baseUrl = cfg.jira.base_url.trimEnd('/')
+        if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
+
+        val payload = JsonObject().apply {
+            add("fields", JsonObject().apply { add("description", descriptionAdf) })
+        }
+
+        return try {
+            val request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI("$baseUrl/rest/api/3/issue/$ticketKey"))
+                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .PUT(java.net.http.HttpRequest.BodyPublishers.ofString(Gson().toJson(payload)))
+                .build()
+            val response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() in 200..204) Result.success(Unit)
+            else Result.failure(
+                RuntimeException(
+                    "Description update failed (${response.statusCode()}): ${
+                        response.body().take(200)
+                    }"
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Description update failed: ${e.message}"))
         }
     }
 

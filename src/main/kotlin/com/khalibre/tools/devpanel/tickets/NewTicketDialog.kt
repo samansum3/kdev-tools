@@ -11,6 +11,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.fields.ExtendableTextComponent
 import com.intellij.ui.components.fields.ExtendableTextField
 import com.intellij.util.ui.JBUI
+import com.google.gson.JsonObject
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.pr.ClipboardImage
 import java.awt.*
@@ -260,17 +261,40 @@ class NewTicketDialog(
 
         setBusy(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            // Get description from TipTap editor as ProseMirror JSON → ADF
-            val descriptionAdf = if (!descriptionEditor.isEmpty()) {
-                descriptionEditor.getContentAdf()
+            // Get description from the TipTap editor. When it has content, pull out any images
+            // embedded via paste or the file-picker button before converting to ADF — they can't
+            // be uploaded as real Jira attachments until the ticket (and its numeric id) exists,
+            // so the initial create goes out without them and the description gets patched
+            // afterwards once they're attached.
+            var descriptionAdf: JsonObject? = null
+            var pendingImages: List<JiraRichText.EmbeddedImage> = emptyList()
+
+            if (!descriptionEditor.isEmpty()) {
+                val html = descriptionEditor.getContentHTML()
+                if (html != null && !JiraRichText.isBlankHtml(html)) {
+                    val (rewrittenHtml, images) = JiraRichText.extractEmbeddedImages(html)
+                    pendingImages = images
+                    descriptionAdf = try {
+                        JiraRichText.htmlToAdf(rewrittenHtml)
+                    } catch (e: Exception) {
+                        println("[NewTicketDialog] ADF conversion error: ${e.message}")
+                        null
+                    }
+                }
             } else {
-                // Fallback: try clipboard for HTML content (same as before)
-                clipboardFallbackDescriptionAdf()
+                // Fallback: try clipboard for HTML content (same as before). Doesn't go through
+                // the image pipeline above — this is raw external HTML, not our own editor's.
+                descriptionAdf = clipboardFallbackDescriptionAdf()
             }
+
+            val creationAdf =
+                if (pendingImages.isNotEmpty() && descriptionAdf != null)
+                    JiraRichText.stripPendingMedia(descriptionAdf)
+                else descriptionAdf
 
             val createResult = JiraService.createTicket(
                 summary = summary,
-                descriptionAdf = descriptionAdf,
+                descriptionAdf = creationAdf,
                 parentKey = parent,
                 typeName = if (parent == null) typeName else null,
                 subtaskTypeId = subtaskId
@@ -279,8 +303,38 @@ class NewTicketDialog(
             var successMessage: String? = null
             var failureMessage: String? = null
 
-            createResult.onSuccess { newKey ->
-                successMessage = "✓ Created $newKey"
+            createResult.onSuccess { issue ->
+                successMessage = "✓ Created ${issue.key}"
+
+                // Upload each embedded image as a real attachment, then patch the description
+                // in with working media references.
+                if (pendingImages.isNotEmpty() && descriptionAdf != null) {
+                    val resolved = mutableMapOf<String, String>()
+                    var uploadFailures = 0
+                    pendingImages.forEach { image ->
+                        val ext = image.filename.substringAfterLast('.', "png")
+                        val tmp = File.createTempFile("desc-image-", ".$ext")
+                        try {
+                            tmp.writeBytes(image.bytes)
+                            JiraService.uploadAttachment(issue.key, tmp, image.filename, image.mimeType)
+                                .onSuccess { attachment -> resolved[image.placeholderId] = attachment.id }
+                                .onFailure { uploadFailures++ }
+                        } finally {
+                            tmp.delete()
+                        }
+                    }
+                    if (resolved.isNotEmpty()) {
+                        val finalAdf =
+                            JiraRichText.resolveMediaPlaceholders(descriptionAdf, resolved, issue.id)
+                        JiraService.updateDescription(issue.key, finalAdf).onFailure {
+                            successMessage += " (description image update failed: ${it.message})"
+                        }
+                    }
+                    if (uploadFailures > 0) {
+                        successMessage += " ($uploadFailures image${if (uploadFailures > 1) "s" else ""} failed to attach)"
+                    }
+                }
+
                 // Independent of description: if there's an image on the clipboard, attach it.
                 val image = try {
                     ClipboardImage.read()
@@ -291,7 +345,7 @@ class NewTicketDialog(
                     val tmp = File.createTempFile("subtask-image-", ".png")
                     try {
                         ImageIO.write(image, "png", tmp)
-                        JiraService.uploadAttachment(newKey, tmp, "screenshot.png").onFailure {
+                        JiraService.uploadAttachment(issue.key, tmp, "screenshot.png").onFailure {
                             successMessage += " (image attach failed: ${it.message})"
                         }
                     } finally {
