@@ -144,7 +144,8 @@ object CreatePrService {
             .firstNotNullOfOrNull { tipMap[it] } ?: return null
 
         val prResult = PrService.runCmd(
-            listOf("gh", "pr", "list", "--head", parentBranch, "--json", "number", "--jq", ".[0].number")
+            listOf("gh", "pr", "list", "--head", parentBranch, "--json", "number", "--jq", ".[0].number"),
+            workDir
         )
         val num = prResult.stdout.trim()
         if (prResult.exitCode != 0 || num.isBlank() || num == "null") return null

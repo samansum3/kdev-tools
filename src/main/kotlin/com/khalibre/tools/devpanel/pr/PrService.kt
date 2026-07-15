@@ -174,7 +174,8 @@ object PrService {
                         "state",
                         "--jq",
                         ".state"
-                    )
+                    ),
+                    workDir
                 ).stdout.trim()
                 if (state == "MERGED") {
                     log.appendLine("Removing resolved dependency...")
