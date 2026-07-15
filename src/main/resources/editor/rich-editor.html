@@ -205,6 +205,110 @@
     .style-menu .style-opt-h5 { font-size: 1em; font-weight: 600; }
     .style-menu .style-opt-h6 { font-size: 0.9em; font-weight: 600; }
 
+    .color-dropdown, .table-dropdown {
+      position: relative;
+    }
+
+    .color-swatch-bar {
+      display: block;
+      width: 16px;
+      height: 3px;
+      margin-top: 1px;
+      border-radius: 1px;
+      background: #de350b;
+    }
+
+    #highlight-color-swatch-bar {
+      background: #fff3a3;
+    }
+
+    .color-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      margin-top: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      padding: 6px;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: repeat(4, 20px);
+      gap: 5px;
+    }
+
+    .color-menu[hidden] {
+      display: none;
+    }
+
+    .color-swatch {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .color-swatch.none-swatch {
+      background: var(--bg);
+      position: relative;
+      grid-column: span 4;
+      width: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--fg);
+    }
+
+    .table-grid-popup {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      margin-top: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      padding: 8px;
+      z-index: 20;
+    }
+
+    .table-grid-popup[hidden] {
+      display: none;
+    }
+
+    .table-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 16px);
+      grid-template-rows: repeat(6, 16px);
+      gap: 2px;
+    }
+
+    .table-grid-cell {
+      width: 16px;
+      height: 16px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      box-sizing: border-box;
+    }
+
+    .table-grid-cell.hovered {
+      background: var(--focus);
+      border-color: var(--focus);
+      opacity: 0.6;
+    }
+
+    .table-grid-label {
+      margin-top: 6px;
+      font-size: 11px;
+      text-align: center;
+      color: var(--fg);
+      opacity: 0.7;
+    }
+
     #editor {
       flex: 1;
       overflow-y: auto;
@@ -259,6 +363,59 @@
 
     #editor li {
       margin: 2px 0;
+    }
+
+    #editor ul[data-tasklist] {
+      list-style: none;
+      padding-left: 4px;
+    }
+
+    #editor ul[data-tasklist] > li {
+      position: relative;
+      padding-left: 22px;
+      list-style: none;
+      cursor: default;
+    }
+
+    #editor ul[data-tasklist] > li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 3px;
+      width: 14px;
+      height: 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      background: var(--bg);
+      box-sizing: border-box;
+    }
+
+    #editor ul[data-tasklist] > li[data-checked="true"]::before {
+      background: var(--focus);
+      border-color: var(--focus);
+    }
+
+    #editor ul[data-tasklist] > li[data-checked="true"]::after {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 5px;
+      width: 5px;
+      height: 8px;
+      border-right: 2px solid #fff;
+      border-bottom: 2px solid #fff;
+      transform: rotate(40deg);
+      pointer-events: none;
+    }
+
+    #editor ul[data-tasklist] > li[data-checked="true"] {
+      opacity: 0.6;
+      text-decoration: line-through;
+    }
+
+    #editor span {
+      border-radius: 2px;
     }
 
     #editor blockquote {
@@ -427,16 +584,41 @@
   <div class="toolbar-group" role="group" aria-label="Lists and structure">
     <button data-cmd="insertUnorderedList" title="Bullet List (Ctrl+Shift+8)">&#8226; List</button>
     <button data-cmd="insertOrderedList" title="Ordered List (Ctrl+Shift+7)">1. List</button>
+    <button data-cmd="taskList" title="Task List">&#9745; Tasks</button>
     <button data-cmd="outdent" title="Outdent (Shift+Tab)">Outdent</button>
     <button data-cmd="indent" title="Indent (Tab)">Indent</button>
     <button data-cmd="blockquote" title="Blockquote (Ctrl+Shift+9)">&#8220; Quote</button>
     <button data-cmd="insertHorizontalRule" title="Horizontal Rule">&#8212;</button>
   </div>
   <div class="sep"></div>
+  <div class="toolbar-group" role="group" aria-label="Color">
+    <div class="color-dropdown" id="text-color-dropdown">
+      <button type="button" id="text-color-btn" title="Text color">
+        A<span class="color-swatch-bar" id="text-color-swatch-bar"></span>
+      </button>
+      <div class="color-menu" id="text-color-menu" hidden role="menu"></div>
+    </div>
+    <div class="color-dropdown" id="highlight-color-dropdown">
+      <button type="button" id="highlight-color-btn" title="Highlight color">
+        &#9998;<span class="color-swatch-bar" id="highlight-color-swatch-bar"></span>
+      </button>
+      <div class="color-menu" id="highlight-color-menu" hidden role="menu"></div>
+    </div>
+  </div>
+  <div class="sep"></div>
   <div class="toolbar-group" role="group" aria-label="Insert">
     <button data-cmd="link" title="Insert/Edit Link (Ctrl+K)">Link</button>
+    <button data-cmd="image" title="Insert Image">Image</button>
+    <div class="table-dropdown" id="table-dropdown">
+      <button type="button" id="table-btn" title="Insert table">Table</button>
+      <div class="table-grid-popup" id="table-grid-popup" hidden>
+        <div class="table-grid" id="table-grid"></div>
+        <div class="table-grid-label" id="table-grid-label">Insert table</div>
+      </div>
+    </div>
   </div>
 </div>
+<input type="file" id="image-file-input" accept="image/*" hidden>
 <div id="link-dialog" class="link-dialog" hidden>
   <input id="link-url-input" type="text" placeholder="https://example.com" spellcheck="false">
   <button id="link-insert-btn" type="button">Insert</button>
@@ -455,6 +637,17 @@
     function runCommand(cmd) {
       if (cmd === 'link') {
         openLinkDialog();
+        return;
+      }
+      if (cmd === 'image') {
+        if (imageFileInput) {
+          imageFileInput.click();
+        }
+        return;
+      }
+      if (cmd === 'taskList') {
+        toggleTaskList();
+        editor.focus();
         return;
       }
       if (SIMPLE.indexOf(cmd) >= 0) {
@@ -560,15 +753,34 @@
       }
     });
 
-    // ── Indent/outdent list items with Tab / Shift+Tab ─────────────────
-    function isInsideList(node) {
+    // ── Indent/outdent list items, and cell-to-cell nav in tables, with Tab ─
+    function closestTag(node, tag) {
       while (node && node !== editor) {
-        if (node.nodeType === 1 && node.tagName === 'LI') {
-          return true;
+        if (node.nodeType === 1 && node.tagName === tag) {
+          return node;
         }
         node = node.parentNode;
       }
-      return false;
+      return null;
+    }
+
+    function isInsideList(node) {
+      return !!closestTag(node, 'LI');
+    }
+
+    function focusCell(cell) {
+      var r = document.createRange();
+      r.selectNodeContents(cell);
+      r.collapse(true);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+
+    function cellsOf(row) {
+      return Array.prototype.filter.call(row.children, function (c) {
+        return c.tagName === 'TD' || c.tagName === 'TH';
+      });
     }
 
     editor.addEventListener('keydown', function (e) {
@@ -576,10 +788,114 @@
         return;
       }
       var sel = window.getSelection();
-      if (sel.rangeCount && isInsideList(sel.getRangeAt(0).startContainer)) {
+      if (!sel.rangeCount) {
+        return;
+      }
+      var node = sel.getRangeAt(0).startContainer;
+
+      var cell = closestTag(node, 'TD') || closestTag(node, 'TH');
+      if (cell) {
+        e.preventDefault();
+        var row = cell.parentElement;
+        var table = closestTag(cell, 'TABLE');
+        if (!table) {
+          return;
+        }
+        var rowCells = cellsOf(row);
+        var cellIndex = rowCells.indexOf(cell);
+        var rows = Array.prototype.slice.call(table.querySelectorAll('tr'));
+        var rowIndex = rows.indexOf(row);
+
+        if (!e.shiftKey) {
+          if (cellIndex < rowCells.length - 1) {
+            focusCell(rowCells[cellIndex + 1]);
+          } else if (rowIndex < rows.length - 1) {
+            focusCell(cellsOf(rows[rowIndex + 1])[0]);
+          } else {
+            var newRow = document.createElement('tr');
+            for (var i = 0; i < rowCells.length; i++) {
+              var td = document.createElement('td');
+              td.innerHTML = '<br>';
+              newRow.appendChild(td);
+            }
+            table.appendChild(newRow);
+            focusCell(newRow.children[0]);
+          }
+        } else {
+          if (cellIndex > 0) {
+            focusCell(rowCells[cellIndex - 1]);
+          } else if (rowIndex > 0) {
+            var prevCells = cellsOf(rows[rowIndex - 1]);
+            focusCell(prevCells[prevCells.length - 1]);
+          }
+        }
+        return;
+      }
+
+      if (isInsideList(node)) {
         e.preventDefault();
         document.execCommand(e.shiftKey ? 'outdent' : 'indent', false, null);
       }
+    });
+
+    // ── Task lists ───────────────────────────────────────────────────────
+    function toggleTaskList() {
+      var sel = window.getSelection();
+      if (!sel.rangeCount) {
+        return;
+      }
+      var node = sel.getRangeAt(0).startContainer;
+
+      var existingLi = closestTag(node, 'LI');
+      if (existingLi && existingLi.parentElement.hasAttribute('data-tasklist')) {
+        var list = existingLi.parentElement;
+        list.removeAttribute('data-tasklist');
+        Array.prototype.forEach.call(list.children, function (li) {
+          li.removeAttribute('data-checked');
+        });
+        return;
+      }
+
+      var existingList = closestTag(node, 'UL') || closestTag(node, 'OL');
+      if (existingList) {
+        var ul = existingList;
+        if (existingList.tagName === 'OL') {
+          ul = document.createElement('ul');
+          while (existingList.firstChild) {
+            ul.appendChild(existingList.firstChild);
+          }
+          existingList.parentNode.replaceChild(ul, existingList);
+        }
+        ul.setAttribute('data-tasklist', 'true');
+        Array.prototype.forEach.call(ul.children, function (li) {
+          li.setAttribute('data-checked', 'false');
+        });
+        return;
+      }
+
+      document.execCommand('insertUnorderedList', false, null);
+      var newList = closestTag(window.getSelection().getRangeAt(0).startContainer, 'UL');
+      if (newList) {
+        newList.setAttribute('data-tasklist', 'true');
+        Array.prototype.forEach.call(newList.children, function (li) {
+          li.setAttribute('data-checked', 'false');
+        });
+      }
+    }
+
+    // Clicking a task item's checkbox gutter toggles its checked state.
+    editor.addEventListener('click', function (e) {
+      var li = e.target.closest('li');
+      if (!li || !li.parentElement || !li.parentElement.hasAttribute('data-tasklist')) {
+        return;
+      }
+      var rect = li.getBoundingClientRect();
+      if (e.clientX - rect.left > 22) {
+        return; // clicked the text, not the checkbox — let normal caret placement happen
+      }
+      e.preventDefault();
+      var checked = li.getAttribute('data-checked') === 'true';
+      li.setAttribute('data-checked', checked ? 'false' : 'true');
     });
 
     // ── Link insert/edit dialog ─────────────────────────────────────────
@@ -723,6 +1039,196 @@
       }
     });
 
+    // ── Table insert (grid picker) ──────────────────────────────────────
+    var tableDropdown = document.getElementById('table-dropdown');
+    var tableBtn = document.getElementById('table-btn');
+    var tableGridPopup = document.getElementById('table-grid-popup');
+    var tableGrid = document.getElementById('table-grid');
+    var tableGridLabel = document.getElementById('table-grid-label');
+    var TABLE_GRID_COLS = 8;
+    var TABLE_GRID_ROWS = 6;
+
+    (function buildTableGrid() {
+      for (var r = 1; r <= TABLE_GRID_ROWS; r++) {
+        for (var c = 1; c <= TABLE_GRID_COLS; c++) {
+          var cell = document.createElement('div');
+          cell.className = 'table-grid-cell';
+          cell.setAttribute('data-row', String(r));
+          cell.setAttribute('data-col', String(c));
+          tableGrid.appendChild(cell);
+        }
+      }
+    })();
+
+    function highlightTableGrid(rows, cols) {
+      Array.prototype.forEach.call(tableGrid.children, function (cell) {
+        var r = parseInt(cell.getAttribute('data-row'), 10);
+        var c = parseInt(cell.getAttribute('data-col'), 10);
+        cell.classList.toggle('hovered', r <= rows && c <= cols);
+      });
+      tableGridLabel.textContent = cols + ' \u00d7 ' + rows;
+    }
+
+    tableGrid.addEventListener('mousemove', function (e) {
+      var cell = e.target.closest('.table-grid-cell');
+      if (!cell) {
+        return;
+      }
+      highlightTableGrid(
+        parseInt(cell.getAttribute('data-row'), 10),
+        parseInt(cell.getAttribute('data-col'), 10)
+      );
+    });
+
+    tableGrid.addEventListener('click', function (e) {
+      var cell = e.target.closest('.table-grid-cell');
+      if (!cell) {
+        return;
+      }
+      insertTable(
+        parseInt(cell.getAttribute('data-row'), 10),
+        parseInt(cell.getAttribute('data-col'), 10)
+      );
+      closeTableGridPopup();
+    });
+
+    function openTableGridPopup() {
+      highlightTableGrid(1, 1);
+      tableGridPopup.hidden = false;
+    }
+
+    function closeTableGridPopup() {
+      tableGridPopup.hidden = true;
+    }
+
+    tableBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (tableGridPopup.hidden) {
+        openTableGridPopup();
+      } else {
+        closeTableGridPopup();
+      }
+    });
+
+    function insertTable(rows, cols) {
+      var table = document.createElement('table');
+      for (var r = 0; r < rows; r++) {
+        var tr = document.createElement('tr');
+        for (var c = 0; c < cols; c++) {
+          var cell = document.createElement(r === 0 ? 'th' : 'td');
+          cell.innerHTML = '<br>';
+          tr.appendChild(cell);
+        }
+        table.appendChild(tr);
+      }
+
+      var sel = window.getSelection();
+      var p = document.createElement('p');
+      p.innerHTML = '<br>'; // trailing paragraph so there's somewhere to type after the table
+
+      var inserted = false;
+      if (sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer)) {
+        var range = sel.getRangeAt(0);
+        var block = range.startContainer;
+        while (block && block !== editor && block.parentNode !== editor) {
+          block = block.parentNode;
+        }
+        if (block && block !== editor) {
+          block.parentNode.insertBefore(table, block.nextSibling);
+          table.parentNode.insertBefore(p, table.nextSibling);
+          inserted = true;
+        }
+      }
+      if (!inserted) {
+        editor.appendChild(table);
+        editor.appendChild(p);
+      }
+      focusCell(table.querySelector('td, th'));
+      editor.focus();
+    }
+
+    // ── Text color / highlight ───────────────────────────────────────────
+    var TEXT_COLORS = [
+      ['#172b4d', 'Black'], ['#6b778c', 'Grey'], ['#0052cc', 'Blue'],
+      ['#00875a', 'Green'], ['#ff8b00', 'Orange'], ['#de350b', 'Red'],
+      ['#6554c0', 'Purple'], ['#bf2600', 'Dark red']
+    ];
+    var HIGHLIGHT_COLORS = [
+      ['#fff0b3', 'Yellow'], ['#c6f6d5', 'Green'], ['#bee3f8', 'Blue'],
+      ['#fed7d7', 'Red'], ['#e9d8fd', 'Purple'], ['#e2e8f0', 'Grey']
+    ];
+
+    function buildColorMenu(menuEl, colors, noneLabel, onPick) {
+      colors.forEach(function (entry) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'color-swatch';
+        btn.style.background = entry[0];
+        btn.title = entry[1];
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          onPick(entry[0]);
+          menuEl.hidden = true;
+        });
+        menuEl.appendChild(btn);
+      });
+      var noneBtn = document.createElement('button');
+      noneBtn.type = 'button';
+      noneBtn.className = 'color-swatch none-swatch';
+      noneBtn.textContent = noneLabel;
+      noneBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        onPick(null);
+        menuEl.hidden = true;
+      });
+      menuEl.appendChild(noneBtn);
+    }
+
+    function applyTextColor(hex) {
+      editor.focus();
+      document.execCommand('styleWithCSS', false, true);
+      document.execCommand('foreColor', false, hex || 'inherit');
+    }
+
+    function applyHighlightColor(hex) {
+      editor.focus();
+      document.execCommand('styleWithCSS', false, true);
+      document.execCommand('hiliteColor', false, hex || 'transparent');
+    }
+
+    var textColorMenu = document.getElementById('text-color-menu');
+    var highlightColorMenu = document.getElementById('highlight-color-menu');
+    buildColorMenu(textColorMenu, TEXT_COLORS, 'Remove color', applyTextColor);
+    buildColorMenu(highlightColorMenu, HIGHLIGHT_COLORS, 'Remove highlight', applyHighlightColor);
+
+    function wireColorDropdown(btnId, menuEl) {
+      document.getElementById(btnId).addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var wasHidden = menuEl.hidden;
+        textColorMenu.hidden = true;
+        highlightColorMenu.hidden = true;
+        menuEl.hidden = !wasHidden;
+      });
+    }
+    wireColorDropdown('text-color-btn', textColorMenu);
+    wireColorDropdown('highlight-color-btn', highlightColorMenu);
+
+    // Close any open popup (style menu, color menus, table grid) on an outside click, and on
+    // Escape alongside the other dismissible UI already handled below.
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('.color-dropdown')) {
+        textColorMenu.hidden = true;
+        highlightColorMenu.hidden = true;
+      }
+      if (!e.target.closest('.table-dropdown')) {
+        closeTableGridPopup();
+      }
+    });
+
     // ── Keyboard shortcuts for commands with no native browser binding ──
     document.addEventListener('keydown', function (e) {
       if (!(e.ctrlKey || e.metaKey)) {
@@ -763,26 +1269,158 @@
       }
     });
 
+    // ── Image insert (file picker + paste) ──────────────────────────────
+    // Both paths always insert the image as the sole content of its own <p>, never inline with
+    // text — the Kotlin/ADF side relies on that exact shape to recognize a standalone image and
+    // turn it into a real Jira media block instead of silently dropping it.
+    var imageFileInput = document.getElementById('image-file-input');
+
+    function insertImageFile(file) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        downscaleImage(reader.result, 1600, function (dataUrl) {
+          insertImageBlock(dataUrl);
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    /** Downscales a data URL so its longer edge is at most [maxDim] px, to keep large screenshots
+     *  from bloating the HTML payload passed over the Kotlin/JS bridge. Leaves small images alone. */
+    function downscaleImage(dataUrl, maxDim, callback) {
+      var img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth;
+        var h = img.naturalHeight;
+        if (!w || !h || (w <= maxDim && h <= maxDim)) {
+          callback(dataUrl);
+          return;
+        }
+        var scale = maxDim / Math.max(w, h);
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        callback(canvas.toDataURL('image/png'));
+      };
+      img.onerror = function () {
+        callback(dataUrl);
+      };
+      img.src = dataUrl;
+    }
+
+    function insertImageBlock(dataUrl) {
+      var img = document.createElement('img');
+      img.src = dataUrl;
+      var p = document.createElement('p');
+      p.appendChild(img);
+
+      var sel = window.getSelection();
+      var inserted = false;
+      if (sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer)) {
+        var range = sel.getRangeAt(0);
+        range.deleteContents();
+        var block = range.startContainer;
+        while (block && block !== editor && block.parentNode !== editor) {
+          block = block.parentNode;
+        }
+        if (block && block !== editor) {
+          block.parentNode.insertBefore(p, block.nextSibling);
+          inserted = true;
+        }
+      }
+      if (!inserted) {
+        editor.appendChild(p);
+      }
+
+      var after = document.createRange();
+      after.setStartAfter(p);
+      after.collapse(true);
+      var sel2 = window.getSelection();
+      sel2.removeAllRanges();
+      sel2.addRange(after);
+      editor.focus();
+    }
+
+    if (imageFileInput) {
+      imageFileInput.addEventListener('change', function () {
+        var file = imageFileInput.files && imageFileInput.files[0];
+        if (file) {
+          insertImageFile(file);
+        }
+        imageFileInput.value = '';
+      });
+    }
+
     // ── Paste cleanup ─────────────────────────────────────────────────
-    editor.addEventListener('paste', function () {
-      setTimeout(function () {
-        editor.querySelectorAll('[style]').forEach(function (el) {
-          el.removeAttribute('style');
-        });
-        editor.querySelectorAll('[class]').forEach(function (el) {
-          el.removeAttribute('class');
-        });
-        editor.querySelectorAll('script,style,meta,link').forEach(function (el) {
-          el.remove();
-        });
-        editor.querySelectorAll('span').forEach(function (s) {
-          var p = s.parentNode;
-          while (s.firstChild) {
-            p.insertBefore(s.firstChild, s);
+    // Rewritten to sanitize only the incoming clipboard content (not the whole editor — the old
+    // version's editor-wide querySelectorAll would strip every existing color span / task-list
+    // attribute on *any* paste, not just the freshly pasted nodes) and to route pasted images
+    // through the same "always its own block" insertion path the file-picker button uses, so the
+    // Kotlin/ADF side can rely on that shape.
+    function cleanPastedHtml(html) {
+      var container = document.createElement('div');
+      container.innerHTML = html;
+      container.querySelectorAll('script,style,meta,link').forEach(function (el) {
+        el.remove();
+      });
+      container.querySelectorAll('[style]').forEach(function (el) {
+        el.removeAttribute('style');
+      });
+      container.querySelectorAll('[class]').forEach(function (el) {
+        el.removeAttribute('class');
+      });
+      container.querySelectorAll('span').forEach(function (s) {
+        var p = s.parentNode;
+        while (s.firstChild) {
+          p.insertBefore(s.firstChild, s);
+        }
+        p.removeChild(s);
+      });
+      container.querySelectorAll('img').forEach(function (img) {
+        img.remove(); // images from external HTML paste aren't ours to re-host; drop rather than
+      });              // ship a dead remote <img src> that will just get dropped again downstream
+      return container.innerHTML;
+    }
+
+    editor.addEventListener('paste', function (e) {
+      if (!e.clipboardData) {
+        return; // let the browser's default paste happen rather than lose the content
+      }
+
+      var items = e.clipboardData.items;
+      for (var i = 0; items && i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image/') === 0) {
+          e.preventDefault();
+          var file = items[i].getAsFile();
+          if (file) {
+            insertImageFile(file);
           }
-          p.removeChild(s);
+          return;
+        }
+      }
+
+      var html = e.clipboardData.getData('text/html');
+      var text = e.clipboardData.getData('text/plain');
+      if (!html && !text) {
+        return;
+      }
+      e.preventDefault();
+
+      var cleaned;
+      if (html) {
+        cleaned = cleanPastedHtml(html);
+      } else {
+        var wrap = document.createElement('div');
+        text.split(/\r?\n/).forEach(function (line) {
+          var p = document.createElement('p');
+          p.textContent = line;
+          wrap.appendChild(p);
         });
-      }, 0);
+        cleaned = wrap.innerHTML;
+      }
+      document.execCommand('insertHTML', false, cleaned);
     });
 
     // ── Image resize ──────────────────────────────────────────────────
@@ -898,6 +1536,9 @@
         if (!styleMenu.hidden) {
           closeStyleMenu();
         }
+        textColorMenu.hidden = true;
+        highlightColorMenu.hidden = true;
+        closeTableGridPopup();
       }
       if ((e.key === 'Backspace' || e.key === 'Delete') && activeWrap) {
         e.preventDefault();
@@ -917,7 +1558,23 @@
     // ── Output sanitization ───────────────────────────────────────────
     var ALLOWED = ['P', 'BR', 'UL', 'OL', 'LI', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL',
       'A', 'CODE', 'PRE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-      'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'HR', 'IMG'];
+      'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'HR', 'IMG', 'SPAN'];
+
+    /** Keeps only `color`/`background-color` declarations with a hex or rgb(a) value, discarding
+     *  everything else — so a span's style attribute can never carry anything but the two color
+     *  marks this editor actually produces, however it got onto the span. */
+    function sanitizeSpanStyle(style) {
+      var parts = [];
+      var colorMatch = /(?:^|;)\s*(?<!-)color:\s*(#[0-9a-fA-F]{6}|rgba?\([0-9.,\s]+\))/i.exec(style);
+      if (colorMatch) {
+        parts.push('color: ' + colorMatch[1]);
+      }
+      var bgMatch = /background-color:\s*(#[0-9a-fA-F]{6}|rgba?\([0-9.,\s]+\))/i.exec(style);
+      if (bgMatch) {
+        parts.push('background-color: ' + bgMatch[1]);
+      }
+      return parts.join('; ');
+    }
 
     function sanitize(node) {
       var kids = Array.prototype.slice.call(node.childNodes);
@@ -942,6 +1599,21 @@
               }
               if (c.tagName === 'IMG' && (n === 'src' || n === 'width' || n === 'height' || n
                   === 'alt')) {
+                continue;
+              }
+              if (c.tagName === 'UL' && n === 'data-tasklist') {
+                continue;
+              }
+              if (c.tagName === 'LI' && n === 'data-checked') {
+                continue;
+              }
+              if (c.tagName === 'SPAN' && n === 'style') {
+                var filtered = sanitizeSpanStyle(c.getAttribute('style') || '');
+                if (filtered) {
+                  c.setAttribute('style', filtered);
+                } else {
+                  c.removeAttribute('style');
+                }
                 continue;
               }
               c.removeAttribute(attrs[j].name);
@@ -971,6 +1643,13 @@
           w.parentNode.insertBefore(i, w);
         }
         w.parentNode.removeChild(w);
+      });
+      // Any task-list <li> that never got a data-checked attribute (e.g. a new item created by
+      // pressing Enter, which the browser clones without it) defaults to unchecked.
+      clone.querySelectorAll('ul[data-tasklist] > li').forEach(function (li) {
+        if (!li.hasAttribute('data-checked')) {
+          li.setAttribute('data-checked', 'false');
+        }
       });
       sanitize(clone);
       return clone.innerHTML;
