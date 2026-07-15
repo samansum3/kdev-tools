@@ -100,29 +100,35 @@ object PrService {
 
         val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
         val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load().git.base_branch
+        val parentBranch = getParentBranch(workDir, target)
+        val rebaseBase = parentBranch ?: onto
 
         val log = StringBuilder()
 
-        if (currentBranch != target) {
-            log.appendLine("Checking out $target...")
-            val checkout = runCmd(listOf("git", "checkout", target), workDir)
-            if (checkout.exitCode != 0)
-                return Result.failure(RuntimeException(checkout.stderr.ifBlank { "Failed to checkout $target" }
-                    .take(300)))
-        } else {
+        if (currentBranch == target) {
             log.appendLine("Already on $target.")
+        } else {
+            log.appendLine("Rebasing $target while staying on $currentBranch.")
         }
 
-        val remote = getRemote(onto)
+        val remote = getRemote(rebaseBase)
 
-        log.appendLine("Fetching $remote/$onto...")
-        val fetch = runCmd(listOf("git", "fetch", remote, onto, "--quiet"), workDir)
+        log.appendLine("Fetching $remote/$rebaseBase...")
+        val fetch = runCmd(
+            listOf("git", "fetch", remote, rebaseBase),
+            workDir
+        )
         if (fetch.exitCode != 0)
-            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $remote/$onto" }
+            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $remote/$rebaseBase" }
                 .take(300)))
 
-        log.appendLine("Rebasing $target onto $remote/$onto...")
-        val pull = runCmd(listOf("git", "pull", "--rebase", remote, onto), workDir)
+        log.appendLine("Rebasing $target onto $remote/$rebaseBase...")
+        val rebaseCmd = if (currentBranch == target) {
+            listOf("git", "rebase", "$remote/$rebaseBase")
+        } else {
+            listOf("git", "rebase", "$remote/$rebaseBase", target)
+        }
+        val pull = runCmd(rebaseCmd, workDir)
         if (pull.exitCode != 0)
             return Result.failure(
                 RuntimeException(
@@ -132,7 +138,9 @@ object PrService {
                 )
             )
 
-        log.appendLine("Done. $target rebased onto $remote/$onto.")
+        pushBranch(workDir, remote, target)
+
+        log.appendLine("Done. $target rebased onto $remote/$rebaseBase.")
         return Result.success(log.toString().trim())
     }
 
@@ -142,23 +150,6 @@ object PrService {
 
         val prNumber = pr.number
         val log = StringBuilder()
-
-        // ── Push in background ─────────────────────────────────────────────────────────
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val targetBranch = pr.headRefName
-            val remote = getRemote(targetBranch)
-
-            runCmd(
-                listOf(
-                    "git",
-                    "push",
-                    "--force-with-lease",
-                    remote,
-                    "$targetBranch:$targetBranch"
-                ),
-                workDir
-            )
-        }
 
         // ── Fetch PR ─────────────────────────────────────────────────────────
         log.appendLine("Fetching PR #$prNumber...")
@@ -415,6 +406,47 @@ object PrService {
     fun currentGhUser(): String? {
         val result = runCmd(listOf("gh", "api", "user", "--jq", ".login"))
         return result.stdout.trim().takeIf { it.isNotBlank() && result.exitCode == 0 }
+    }
+
+    fun pushBranch(workDir: File, remote: String, targetBranch: String) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCmd(
+                listOf(
+                    "git",
+                    "push",
+                    "--force-with-lease",
+                    remote,
+                    "$targetBranch:$targetBranch"
+                ),
+                workDir
+            )
+        }
+    }
+
+    private fun getParentBranch(
+        workDir: File,
+        branchName: String
+    ): String? {
+        val parentPr = CreatePrService.detectParentPrRef(workDir, branchName)
+            ?.removePrefix("#")
+            ?: return null
+
+        val result = runCmd(
+            listOf(
+                "gh",
+                "pr",
+                "view",
+                parentPr,
+                "--json",
+                "headRefName",
+                "--jq",
+                ".headRefName"
+            ),
+            workDir
+        )
+
+        return result.stdout.trim()
+            .takeIf { result.exitCode == 0 && it.isNotBlank() }
     }
 
     private fun getRemote(branchName: String): String {
