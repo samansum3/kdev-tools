@@ -145,7 +145,7 @@ object PrService {
         // ── Fetch PR ─────────────────────────────────────────────────────────
         log.appendLine("Fetching PR #$prNumber...")
         val prViewResult =
-            runCmd(listOf("gh", "pr", "view", "$prNumber", "--json", "number,body"), workDir)
+            runCmd(listOf("gh", "pr", "view", "$prNumber", "--json", "number,body,headRefName"), workDir)
         if (prViewResult.exitCode != 0)
             return Result.failure(RuntimeException("PR #$prNumber not found"))
         val prJson = try {
@@ -154,11 +154,12 @@ object PrService {
             return Result.failure(RuntimeException("Failed to parse PR JSON"))
         }
         val prBody = prJson.get("body")?.takeIf { !it.isJsonNull }?.asString ?: ""
+        val headBranch = prJson.get("headRefName")?.takeIf { !it.isJsonNull }?.asString
         log.appendLine("PR #$prNumber found")
 
         var newBody = prBody
 
-        // ── 1. Dependency cleanup (always first) ──────────────────────────────
+        // ── 1. Dependency cleanup / backfill (always first) ────────────────────
         val dependLine = prBody.lines().firstOrNull { it.contains("DEPEND ON #") }
         if (dependLine != null) {
             val parentPr = Regex("DEPEND ON #(\\d+)").find(dependLine)?.groupValues?.get(1)
@@ -187,6 +188,18 @@ object PrService {
                 } else {
                     log.appendLine("Dependency still active ($state)")
                 }
+            }
+        } else if (headBranch != null) {
+            // No dependency line yet — check whether this branch actually has an unlinked
+            // parent PR (e.g. it was created before the dependency detection was wired up, or
+            // the line was edited out by hand) and backfill it, same as create-pr would.
+            log.appendLine("No dependency found — checking for an unlinked parent PR...")
+            val parentPrRef = CreatePrService.detectParentPrRef(workDir, headBranch, "origin/$headBranch")
+            if (parentPrRef != null) {
+                newBody = "### DEPEND ON $parentPrRef\n${newBody.trimStart('\n')}"
+                log.appendLine("✔ Added dependency $parentPrRef")
+            } else {
+                log.appendLine("No parent PR found")
             }
         } else {
             log.appendLine("No dependency found")

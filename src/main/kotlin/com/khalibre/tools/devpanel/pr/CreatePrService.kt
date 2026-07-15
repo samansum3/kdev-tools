@@ -113,11 +113,15 @@ object CreatePrService {
     }
 
     /**
-     * Finds the nearest ancestor commit (excluding HEAD itself) that is also the tip of another
-     * ticket-shaped branch, then looks up whether that branch has an open PR. Mirrors the
+     * Finds the nearest ancestor commit (excluding [logRef]'s own tip) that is also the tip of
+     * another ticket-shaped branch, then looks up whether that branch has an open PR. Mirrors the
      * script's BRANCH_TIP_MAP / walk-the-log approach.
+     *
+     * [logRef] defaults to `HEAD` (the create-pr case: walking the currently checked-out branch).
+     * [PrService.updatePr] passes an explicit `origin/<branch>` ref instead, since the PR being
+     * updated isn't necessarily the branch that's currently checked out locally.
      */
-    private fun detectParentPrRef(workDir: File, currentBranch: String): String? {
+    internal fun detectParentPrRef(workDir: File, currentBranch: String, logRef: String = "HEAD"): String? {
         val refsResult = PrService.runCmd(
             listOf("git", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes/origin"),
             workDir
@@ -138,9 +142,9 @@ object CreatePrService {
         }
         if (tipMap.isEmpty()) return null
 
-        val logResult = PrService.runCmd(listOf("git", "log", "--pretty=format:%H", "HEAD"), workDir)
+        val logResult = PrService.runCmd(listOf("git", "log", "--pretty=format:%H", logRef), workDir)
         if (logResult.exitCode != 0) return null
-        val parentBranch = logResult.stdout.lines().drop(1) // skip HEAD's own commit
+        val parentBranch = logResult.stdout.lines().drop(1) // skip logRef's own commit
             .firstNotNullOfOrNull { tipMap[it] } ?: return null
 
         val prResult = PrService.runCmd(
