@@ -112,8 +112,7 @@ object PrService {
             log.appendLine("Already on $target.")
         }
 
-        // Existing remote selection logic: ticket-shaped `onto` → origin, else upstream
-        val remote = if (Regex("^[A-Z]+-[0-9]+$").matches(onto)) "origin" else "upstream"
+        val remote = getRemote(onto)
 
         log.appendLine("Fetching $remote/$onto...")
         val fetch = runCmd(listOf("git", "fetch", remote, onto, "--quiet"), workDir)
@@ -136,16 +135,35 @@ object PrService {
         return Result.success(log.toString().trim())
     }
 
-    fun updatePr(project: Project, prNumber: Int, setImg: Boolean = false): Result<String> {
+    fun updatePr(project: Project, pr: PullRequest, setImg: Boolean = false): Result<String> {
         val workDir = project.basePath?.let { File(it) }
             ?: return Result.failure(RuntimeException("No project directory."))
 
+        val prNumber = pr.number
         val log = StringBuilder()
+
+        // ── Push ─────────────────────────────────────────────────────────
+        val targetBranch = pr.headRefName
+        val remote = getRemote(targetBranch)
+        val pushResult = runCmd(
+            listOf(
+                "git",
+                "push",
+                "--force-with-lease",
+                remote,
+                "${targetBranch}:${targetBranch}"
+            ),
+            workDir
+        )
+        if (pushResult.exitCode != 0)
+            return Result.failure(RuntimeException("Failed to push updates to #$prNumber"))
 
         // ── Fetch PR ─────────────────────────────────────────────────────────
         log.appendLine("Fetching PR #$prNumber...")
-        val prViewResult =
-            runCmd(listOf("gh", "pr", "view", "$prNumber", "--json", "number,body,headRefName"), workDir)
+        val prViewResult = runCmd(
+            listOf("gh", "pr", "view", "$prNumber", "--json", "number,body,headRefName"),
+            workDir
+        )
         if (prViewResult.exitCode != 0)
             return Result.failure(RuntimeException("PR #$prNumber not found"))
         val prJson = try {
@@ -194,7 +212,8 @@ object PrService {
             // parent PR (e.g. it was created before the dependency detection was wired up, or
             // the line was edited out by hand) and backfill it, same as create-pr would.
             log.appendLine("No dependency found — checking for an unlinked parent PR...")
-            val parentPrRef = CreatePrService.detectParentPrRef(workDir, headBranch, "origin/$headBranch")
+            val parentPrRef =
+                CreatePrService.detectParentPrRef(workDir, headBranch, "origin/$headBranch")
             if (parentPrRef != null) {
                 newBody = "### DEPEND ON $parentPrRef\n${newBody.trimStart('\n')}"
                 log.appendLine("✔ Added dependency $parentPrRef")
@@ -356,7 +375,8 @@ object PrService {
                         results[num] = MergeInfo(mergeable, outdated, blocked)
                     }
                 } catch (e: Exception) {
-                    results[num] = MergeInfo(MergeableState.UNKNOWN,
+                    results[num] = MergeInfo(
+                        MergeableState.UNKNOWN,
                         isOutdated = false,
                         isBlocked = false
                     )
@@ -393,6 +413,12 @@ object PrService {
     fun currentGhUser(): String? {
         val result = runCmd(listOf("gh", "api", "user", "--jq", ".login"))
         return result.stdout.trim().takeIf { it.isNotBlank() && result.exitCode == 0 }
+    }
+
+    private fun getRemote(branchName: String): String {
+        // Existing remote selection logic: ticket-shaped `onto` → origin, else upstream
+        val remote = if (Regex("^[A-Z]+-[0-9]+$").matches(branchName)) "origin" else "upstream"
+        return remote
     }
 
     // ── Internals ────────────────────────────────────────────────────────────

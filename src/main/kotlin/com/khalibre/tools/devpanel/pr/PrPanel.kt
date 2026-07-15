@@ -735,7 +735,7 @@ class PrPanel(
     private fun doUpdatePr(pr: PullRequest, button: JButton) {
         val stopSpinner = CardUtils.startButtonSpinner(button)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = PrService.updatePr(project, pr.number)
+            val result = PrService.updatePr(project, pr)
             SwingUtilities.invokeLater {
                 stopSpinner()
                 if (result.isSuccess) {
