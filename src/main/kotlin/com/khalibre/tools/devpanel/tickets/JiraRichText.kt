@@ -164,8 +164,135 @@ object JiraRichText {
         }
     }
 
+    // ── Images: extract embedded base64 <img>s, then resolve placeholders after upload ─────────
+
+    /** One image the user embedded in the description via paste or the file picker, still
+     *  carrying its raw bytes — extracted from a `data:` URI so it can be uploaded as a real
+     *  Jira attachment. [placeholderId] is the token (`cid:0`, `cid:1`, ...) swapped into the
+     *  `<img src>` in place of the data URI, and later into the ADF `media` node's `id` attr,
+     *  so [resolveMediaPlaceholders] can find and replace it once the real attachment id exists. */
+    data class EmbeddedImage(
+        val placeholderId: String,
+        val bytes: ByteArray,
+        val mimeType: String,
+        val filename: String
+    )
+
+    private val DATA_URI_REGEX = Regex("""^data:([^;,]+);base64,(.+)$""", RegexOption.DOT_MATCHES_ALL)
+
+    /** Finds every `<img src="data:...">` in [html], swaps its `src` for a `cid:N` placeholder
+     *  token, and returns the rewritten HTML alongside the decoded bytes for each image. Images
+     *  with a non-`data:` src (nothing our own editor produces, but paranoia costs nothing) or
+     *  corrupt base64 are dropped from the HTML entirely, since there's nothing to upload. */
+    fun extractEmbeddedImages(html: String): Pair<String, List<EmbeddedImage>> {
+        val doc = Jsoup.parse(html)
+        val images = mutableListOf<EmbeddedImage>()
+        var index = 0
+        doc.select("img").forEach { img ->
+            val src = img.attr("src")
+            val match = DATA_URI_REGEX.find(src)
+            if (match == null) {
+                img.remove()
+                return@forEach
+            }
+            val mime = match.groupValues[1]
+            val bytes = try {
+                java.util.Base64.getMimeDecoder().decode(match.groupValues[2])
+            } catch (_: Exception) {
+                null
+            }
+            if (bytes == null) {
+                img.remove()
+                return@forEach
+            }
+            val ext = mime.substringAfter('/').substringBefore('+').takeIf { it.isNotBlank() } ?: "png"
+            val placeholder = "cid:${index++}"
+            images += EmbeddedImage(placeholder, bytes, mime, "image-${images.size}.$ext")
+            img.attr("src", placeholder)
+        }
+        return doc.body().html() to images
+    }
+
+    /** For the initial `createTicket` call — Jira would reject `media` nodes referencing our
+     *  `cid:` placeholders (they aren't real attachment ids yet), so this drops any `mediaSingle`
+     *  block still carrying one. Called before the images have been uploaded; the real content is
+     *  patched in afterwards via [resolveMediaPlaceholders] + an update call. */
+    fun stripPendingMedia(adf: JsonObject): JsonObject = walkAndFilterMedia(adf) { null }
+
+    /** After uploading each [EmbeddedImage] as a real Jira attachment, call this with a map of
+     *  `placeholderId -> attachmentId` to rewrite the ADF's `media` nodes with working references
+     *  (`collection` is `"jira-<numeric issue id>"`, the convention Jira uses for attachments
+     *  uploaded through the classic attachments endpoint). Any placeholder missing from
+     *  [resolved] (upload failed) has its `mediaSingle` block dropped rather than left broken. */
+    fun resolveMediaPlaceholders(
+        adf: JsonObject,
+        resolved: Map<String, String>,
+        issueId: String
+    ): JsonObject = walkAndFilterMedia(adf) { placeholderId ->
+        resolved[placeholderId]?.let { attachmentId ->
+            JsonObject().apply {
+                addProperty("id", attachmentId)
+                addProperty("type", "file")
+                addProperty("collection", "jira-$issueId")
+            }
+        }
+    }
+
+    /** Walks [adf]'s content tree, and for every `mediaSingle > media` node whose `id` attr starts
+     *  with `cid:`, either replaces its `attrs` with whatever [resolve] returns, or — if it returns
+     *  null — drops the whole `mediaSingle` block. Returns a new tree; [adf] isn't mutated. */
+    private fun walkAndFilterMedia(
+        adf: JsonObject,
+        resolve: (placeholderId: String) -> JsonObject?
+    ): JsonObject {
+        fun walkArray(arr: JsonArray): JsonArray {
+            val out = JsonArray()
+            for (el in arr) {
+                if (el !is JsonObject) {
+                    out.add(el)
+                    continue
+                }
+                if (el.get("type")?.asString == "mediaSingle") {
+                    val mediaNode = el.getAsJsonArray("content")
+                        ?.firstOrNull { it is JsonObject && it.get("type")?.asString == "media" }
+                            as? JsonObject
+                    val mediaId = mediaNode?.getAsJsonObject("attrs")?.get("id")?.asString
+                    if (mediaId != null && mediaId.startsWith("cid:")) {
+                        val newAttrs = resolve(mediaId)
+                        if (newAttrs == null) continue // drop this mediaSingle block entirely
+                        val rebuilt = el.deepCopy()
+                        val rebuiltMedia = rebuilt.getAsJsonArray("content")
+                            .first { it.asJsonObject.get("type")?.asString == "media" }.asJsonObject
+                        rebuiltMedia.add("attrs", newAttrs)
+                        out.add(rebuilt)
+                        continue
+                    }
+                }
+                val copy = el.deepCopy()
+                copy.entrySet().toList().forEach { (key, value) ->
+                    if (value is JsonArray) copy.add(key, walkArray(value))
+                }
+                out.add(copy)
+            }
+            return out
+        }
+
+        val result = adf.deepCopy()
+        result.getAsJsonArray("content")?.let { result.add("content", walkArray(it)) }
+        return result
+    }
+
     private fun blockToAdf(el: Element): JsonObject? = when (el.tagName().lowercase()) {
-        "p" -> paragraphNode(inlineContentOf(el))
+        "p" -> {
+            val onlyChild = el.children().singleOrNull()
+            if (onlyChild != null && onlyChild.tagName().equals("img", ignoreCase = true)
+                && el.textNodes().all { it.isBlank }
+            ) {
+                mediaSingleNode(onlyChild)
+            } else {
+                paragraphNode(inlineContentOf(el))
+            }
+        }
         "div" -> {
             val blocks = mutableListOf<JsonObject>()
             val loose = mutableListOf<Node>()
@@ -296,10 +423,40 @@ object JiraRichText {
         el.childNodes().flatMap { renderInline(it, emptyList()) }
 
     private fun listNode(type: String, listEl: Element): JsonObject {
-        val items = listEl.children()
-            .filter { it.tagName().equals("li", ignoreCase = true) }
-            .map { listItemNode(it) }
-        return JsonObject().apply { addProperty("type", type); add("content", arr(items)) }
+        val isTaskList = listEl.attr("data-tasklist") == "true"
+        val liEls = listEl.children().filter { it.tagName().equals("li", ignoreCase = true) }
+        return if (isTaskList) {
+            JsonObject().apply {
+                addProperty("type", "taskList")
+                add("attrs", JsonObject().apply {
+                    addProperty("localId", java.util.UUID.randomUUID().toString())
+                })
+                add("content", arr(liEls.map { taskItemNode(it) }))
+            }
+        } else {
+            JsonObject().apply {
+                addProperty("type", type)
+                add("content", arr(liEls.map { listItemNode(it) }))
+            }
+        }
+    }
+
+    /** A task list item's content is inline content directly (no paragraph wrapper), per Jira's
+     *  ADF schema — unlike a regular `listItem`, which wraps its content in paragraphs. Nested
+     *  sub-lists inside a task item aren't supported (dropped, inline text only). */
+    private fun taskItemNode(li: Element): JsonObject {
+        val state = if (li.attr("data-checked") == "true") "DONE" else "TODO"
+        val inline = li.childNodes()
+            .filterNot { it is Element && it.tagName().lowercase() in setOf("ul", "ol") }
+            .flatMap { renderInline(it, emptyList()) }
+        return JsonObject().apply {
+            addProperty("type", "taskItem")
+            add("attrs", JsonObject().apply {
+                addProperty("localId", java.util.UUID.randomUUID().toString())
+                addProperty("state", state)
+            })
+            add("content", arr(inline))
+        }
     }
 
     private fun listItemNode(li: Element): JsonObject {
@@ -344,6 +501,25 @@ object JiraRichText {
         addProperty("type", "codeBlock")
         add("content", arr(listOf(JsonObject().apply {
             addProperty("type", "text"); addProperty("text", text)
+        })))
+    }
+
+    /** [img]'s `src` is expected to be either a real Jira attachment placeholder token (one of the
+     *  `cid:N` values produced by [extractEmbeddedImages]) or, if that step was skipped, left as-is
+     *  — either way the id gets resolved (or the whole node dropped) by [resolveMediaPlaceholders]
+     *  before the ADF is actually sent to Jira. A bare `htmlToAdf` call with no such resolution step
+     *  will produce a `media` node with a non-functional placeholder id — callers dealing with
+     *  images must always run the upload → resolve pipeline. */
+    private fun mediaSingleNode(img: Element): JsonObject = JsonObject().apply {
+        addProperty("type", "mediaSingle")
+        add("attrs", JsonObject().apply { addProperty("layout", "center") })
+        add("content", arr(listOf(JsonObject().apply {
+            addProperty("type", "media")
+            add("attrs", JsonObject().apply {
+                addProperty("id", img.attr("src"))
+                addProperty("type", "file")
+                addProperty("collection", "")
+            })
         })))
     }
 
@@ -413,10 +589,45 @@ object JiraRichText {
                 node.childNodes().flatMap { renderInline(it, newMarks) }
             }
 
+            "span" -> {
+                var newMarks = marks
+                val style = node.attr("style")
+                // Negative lookbehind excludes "background-color:" when matching plain "color:".
+                Regex("""(?<!-)color:\s*([^;]+)""").find(style)?.let { m ->
+                    parseCssColor(m.groupValues[1])?.let { hex ->
+                        newMarks =
+                            newMarks + markNode(
+                                "textColor",
+                                JsonObject().apply { addProperty("color", hex) })
+                    }
+                }
+                Regex("""background-color:\s*([^;]+)""").find(style)?.let { m ->
+                    parseCssColor(m.groupValues[1])?.let { hex ->
+                        newMarks =
+                            newMarks + markNode(
+                                "backgroundColor",
+                                JsonObject().apply { addProperty("color", hex) })
+                    }
+                }
+                node.childNodes().flatMap { renderInline(it, newMarks) }
+            }
+
             else -> node.childNodes().flatMap { renderInline(it, marks) }
         }
 
         else -> emptyList()
+    }
+
+    /** Parses a CSS color value in either `#rrggbb` or `rgb(r, g, b)` / `rgba(...)` form into a
+     *  normalized lowercase hex string. Returns null for anything else (named colors, `inherit`,
+     *  garbage from a rogue paste, etc.) so callers can simply skip applying a mark. */
+    private fun parseCssColor(value: String): String? {
+        Regex("""#([0-9a-fA-F]{6})""").find(value)?.let { return "#" + it.groupValues[1].lowercase() }
+        Regex("""rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)""").find(value)?.let { m ->
+            val (r, g, b) = m.destructured
+            return "#%02x%02x%02x".format(r.toInt().coerceIn(0, 255), g.toInt().coerceIn(0, 255), b.toInt().coerceIn(0, 255))
+        }
+        return null
     }
 
     private fun markNode(type: String, attrs: JsonObject? = null): JsonObject = JsonObject().apply {
