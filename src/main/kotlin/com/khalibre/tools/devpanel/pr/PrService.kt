@@ -145,6 +145,23 @@ object PrService {
             pushBranch(workDir, targetRemote, target)
         }
 
+        // `git rebase <upstream> <branch>` implicitly checks out <branch> as a side effect
+        // (per git's own docs). When the caller started on a different branch, switch back so
+        // they land where they started rather than on the branch that just got rebased/pushed.
+        if (currentBranch != target) {
+            val restore = runCmd(listOf("git", "checkout", currentBranch), workDir)
+            if (restore.exitCode == 0) {
+                log.appendLine("Switched back to $currentBranch.")
+            } else {
+                log.appendLine(
+                    "Note: couldn't switch back to $currentBranch automatically " +
+                            "(${
+                                restore.stderr.ifBlank { restore.stdout }.take(200)
+                            }); you're still on $target."
+                )
+            }
+        }
+
         log.appendLine("Done. $target rebased onto $baseRemote/$rebaseBaseBranch.")
         return Result.success(log.toString().trim())
     }
