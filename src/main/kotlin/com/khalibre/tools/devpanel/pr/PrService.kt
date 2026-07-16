@@ -3,6 +3,7 @@ package com.khalibre.tools.devpanel.pr
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
 import java.io.File
@@ -101,7 +102,7 @@ object PrService {
         val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
         val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
         val parentBranch = getParentBranch(workDir, target)
-        val rebaseBase = parentBranch ?: onto
+        val rebaseBaseBranch = parentBranch ?: onto
 
         val log = StringBuilder()
 
@@ -111,22 +112,22 @@ object PrService {
             log.appendLine("Rebasing $target while staying on $currentBranch.")
         }
 
-        val remote = getRemote(rebaseBase)
+        val baseRemote = getRemote(rebaseBaseBranch)
 
-        log.appendLine("Fetching $remote/$rebaseBase...")
+        log.appendLine("Fetching $baseRemote/$rebaseBaseBranch...")
         val fetch = runCmd(
-            listOf("git", "fetch", remote, rebaseBase),
+            listOf("git", "fetch", baseRemote, rebaseBaseBranch),
             workDir
         )
         if (fetch.exitCode != 0)
-            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $remote/$rebaseBase" }
+            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $baseRemote/$rebaseBaseBranch" }
                 .take(300)))
 
-        log.appendLine("Rebasing $target onto $remote/$rebaseBase...")
+        log.appendLine("Rebasing $target onto $baseRemote/$rebaseBaseBranch...")
         val rebaseCmd = if (currentBranch == target) {
-            listOf("git", "rebase", "$remote/$rebaseBase")
+            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch")
         } else {
-            listOf("git", "rebase", "$remote/$rebaseBase", target)
+            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch", target)
         }
         val pull = runCmd(rebaseCmd, workDir)
         if (pull.exitCode != 0)
@@ -138,12 +139,13 @@ object PrService {
                 )
             )
 
-        log.appendLine("Pushing $target to $remote...")
-        pushBranch(workDir, remote, target).getOrElse {
-            return Result.failure(RuntimeException("Rebase succeeded but push failed: ${it.message}"))
+        // Push in background
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val targetRemote = getRemote(target)
+            pushBranch(workDir, targetRemote, target)
         }
 
-        log.appendLine("Done. $target rebased onto $remote/$rebaseBase.")
+        log.appendLine("Done. $target rebased onto $baseRemote/$rebaseBaseBranch.")
         return Result.success(log.toString().trim())
     }
 
