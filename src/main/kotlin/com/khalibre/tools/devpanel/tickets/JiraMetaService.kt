@@ -85,12 +85,12 @@ object JiraMetaService {
     /** Force-fetches from Jira, overwrites cache, returns fresh list. */
     fun fetchAndCacheStatuses(cwDir: File): List<StatusInfo> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val project = cfg.jira.project_key
             if (baseUrl.isBlank() || project.isBlank()) return emptyList()
 
-            val conn = openJiraConn(cfg, "$baseUrl/rest/api/3/project/$project/statuses")
+            val conn = openJiraConn(cwDir, "$baseUrl/rest/api/3/project/$project/statuses")
             if (conn.responseCode != 200) return emptyList()
 
             val root = JsonParser.parseString(conn.inputStream.bufferedReader().readText())
@@ -134,12 +134,12 @@ object JiraMetaService {
     /** Force-fetches from Jira, overwrites cache, returns fresh list. */
     fun fetchAndCacheTypes(cwDir: File): List<IssueTypeInfo> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val project = cfg.jira.project_key
             if (baseUrl.isBlank() || project.isBlank()) return emptyList()
 
-            val conn = openJiraConn(cfg, "$baseUrl/rest/api/3/project/$project")
+            val conn = openJiraConn(cwDir, "$baseUrl/rest/api/3/project/$project")
             if (conn.responseCode != 200) return emptyList()
 
             val root =
@@ -186,12 +186,12 @@ object JiraMetaService {
     /** Force-fetches from Jira's createmeta endpoint, overwrites cache, returns fresh list. */
     fun fetchAndCacheSubtaskTypes(cwDir: File): List<SubtaskTypeInfo> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val project = cfg.jira.project_key
             if (baseUrl.isBlank() || project.isBlank()) return emptyList()
 
-            val conn = openJiraConn(cfg, "$baseUrl/rest/api/3/issue/createmeta/$project/issuetypes")
+            val conn = openJiraConn(cwDir, "$baseUrl/rest/api/3/issue/createmeta/$project/issuetypes")
             if (conn.responseCode != 200) return emptyList()
 
             val root =
@@ -215,9 +215,9 @@ object JiraMetaService {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun openJiraConn(cfg: DevConfig, url: String): HttpURLConnection {
+    private fun openJiraConn(cwDir: File, url: String): HttpURLConnection {
         val conn = java.net.URL(url).openConnection() as HttpURLConnection
-        JiraAuth.apply(conn)
+        JiraAuth.apply(conn, cwDir)
         conn.setRequestProperty("Accept", "application/json")
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000

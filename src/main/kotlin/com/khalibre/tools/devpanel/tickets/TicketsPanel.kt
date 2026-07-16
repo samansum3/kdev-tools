@@ -165,7 +165,7 @@ class TicketsPanel(
         allTypes: List<JiraMetaService.IssueTypeInfo>
     ) {
         // Always re-read config so excluded lists reflect latest saved Ticket Config
-        val cfg = DevConfig.load().ticket
+        val cfg = DevConfig.load(cwDir()).ticket
         val excludedStatuses = cfg.excludedStatuses.toSet()
         val excludedTypes = cfg.excludedTypes.toSet()
 
@@ -539,9 +539,10 @@ class TicketsPanel(
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                if (currentUserEmail == null) currentUserEmail = JiraService.currentUserEmail()
-                val jql = JiraService.buildJql(filters, currentUserEmail)
-                val tickets = JiraService.searchTickets(jql)
+                val cw = cwDir()
+                if (currentUserEmail == null) currentUserEmail = JiraService.currentUserEmail(cw)
+                val jql = JiraService.buildJql(filters, currentUserEmail, cw)
+                val tickets = JiraService.searchTickets(jql, cw)
                 SwingUtilities.invokeLater {
                     if (requestGeneration.get() != myGeneration) return@invokeLater
                     currentJql = jql
@@ -669,7 +670,7 @@ class TicketsPanel(
 
         // Row 1: status · type · priority · assignee
         val isMe = ticket.assigneeEmail != null && ticket.assigneeEmail == currentUserEmail
-        val compactMode = DevConfig.load().ticket.itemMode == "compact"
+        val compactMode = DevConfig.load(cwDir()).ticket.itemMode == "compact"
         val metaPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false; border = JBUI.Borders.emptyTop(1)
         }
@@ -756,11 +757,12 @@ class TicketsPanel(
 
     private fun addTicketActions(panel: JPanel, ticket: JiraTicket, isMe: Boolean) {
         val isUnassigned = ticket.assigneeName == null
-        val devTypes = DevConfig.load().ticket.developmentTypes.toSet()
+        val cw = cwDir()
+        val devTypes = DevConfig.load(cw).ticket.developmentTypes.toSet()
         val isEligibleType = devTypes.isEmpty() || ticket.issueType in devTypes
-        val compactMode = DevConfig.load().ticket.itemMode == "compact"
+        val compactMode = DevConfig.load(cw).ticket.itemMode == "compact"
 
-        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key) })
+        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key, cw) })
 
         // Compact mode moves transitions into the status-badge dropdown (see
         // buildStatusDropdownTrigger) and frees up the room a row of transition buttons
@@ -768,7 +770,7 @@ class TicketsPanel(
         lateinit var copyLinkBtn: JButton
         copyLinkBtn = CardUtils.makeActionButton("Copy link") {
             CardUtils.copyToClipboardWithBalloon(
-                JiraService.ticketUrl(ticket.key), copyLinkBtn, "Link copied"
+                JiraService.ticketUrl(ticket.key, cw), copyLinkBtn, "Link copied"
             )
         }
         panel.add(copyLinkBtn)
@@ -832,7 +834,7 @@ class TicketsPanel(
         }
         val placeholder = onLoading()
         ApplicationManager.getApplication().executeOnPooledThread {
-            val transitions = JiraService.fetchAvailableTransitions(ticket.key)
+            val transitions = JiraService.fetchAvailableTransitions(ticket.key, cwDir())
             transitionsCache[cacheKey] = transitions
             SwingUtilities.invokeLater { onReady(transitions, placeholder) }
         }
@@ -1037,7 +1039,7 @@ class TicketsPanel(
                 if (result.isSuccess) {
                     // Still on background thread — safe to do the network call here
                     val refreshed = try {
-                        JiraService.refreshTicket(currentJql, ticket.key)
+                        JiraService.refreshTicket(currentJql, ticket.key, cwDir())
                     } catch (_: Exception) {
                         null
                     }

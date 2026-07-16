@@ -44,7 +44,7 @@ object StandupService {
             .replace(Regex(".*github\\.com[:/]"), "").removeSuffix(".git")
 
         val today = LocalDate.now()
-        val prevWorkday = findPrevWorkday()
+        val prevWorkday = findPrevWorkday(com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project))
         val prevWorkdayStart = "$prevWorkday 00:00"
         val prevWorkdayEnd = "$prevWorkday 23:59"
         val midnightToday = "$today 00:00"
@@ -94,8 +94,8 @@ object StandupService {
 
     // ── Previous workday (skips weekends + Cambodia public holidays) ────────────
 
-    private fun findPrevWorkday(): LocalDate {
-        val apiKey = DevConfig.load().calendarific.api_key
+    private fun findPrevWorkday(cwDir: File?): LocalDate {
+        val apiKey = DevConfig.load(cwDir).calendarific.api_key
         var check = LocalDate.now().minusDays(1)
         var holidays: Set<LocalDate> = emptySet()
         var holidaysLoaded = false
@@ -283,8 +283,8 @@ object StandupService {
         }
     }
 
-    fun sendToTelegram(report: StandupReport): Result<Unit> {
-        val cfg = DevConfig.load().telegram
+    fun sendToTelegram(report: StandupReport, cwDir: File?): Result<Unit> {
+        val cfg = DevConfig.load(cwDir).telegram
         if (cfg.bot_token.isBlank() || cfg.chat_id.isBlank())
             return Result.failure(RuntimeException("Telegram bot token / chat id not configured"))
 

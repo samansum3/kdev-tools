@@ -6,7 +6,6 @@ import java.io.File
 
 data class GitConfig(
     val base_branch: String = "main",
-    val stack_remote: String = "origin",
     val default_reviewers: List<String> = emptyList(),
     val user_session: String = "",
     val can_merge: Boolean = false
@@ -55,24 +54,54 @@ data class DevConfig(
     val calendarific: CalendarificConfig = CalendarificConfig()
 ) {
     companion object {
-        private val CONFIG_FILE =
+        private const val CONFIG_FILENAME = "general-config.json"
+
+        // Pre-relocation location. Only read once, as a one-time migration source, when a
+        // project's .git/cw/general-config.json doesn't exist yet.
+        private val LEGACY_CONFIG_FILE =
             File(System.getProperty("user.home"), ".config/devtools/config.json")
+
         private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
 
-        fun load(): DevConfig {
-            if (!CONFIG_FILE.exists()) return DevConfig()
-            return try {
-                gson.fromJson(CONFIG_FILE.readText(), DevConfig::class.java) ?: DevConfig()
-            } catch (e: Exception) {
-                DevConfig()
+        /**
+         * Resolves the config file for [cwDir] (a project's `.git/cw` directory, from
+         * [com.khalibre.tools.devpanel.common.ProjectPaths.cwDir]). Falls back to the legacy
+         * home-directory location when [cwDir] is unavailable (e.g. no git repo detected).
+         */
+        fun configFile(cwDir: File?): File =
+            if (cwDir != null) File(cwDir, CONFIG_FILENAME) else LEGACY_CONFIG_FILE
+
+        fun load(cwDir: File?): DevConfig {
+            val file = configFile(cwDir)
+            if (file.exists()) {
+                return try {
+                    gson.fromJson(file.readText(), DevConfig::class.java) ?: DevConfig()
+                } catch (e: Exception) {
+                    DevConfig()
+                }
             }
+            // One-time migration: an old-style ~/.config/devtools/config.json exists but this
+            // project hasn't got its own .git/cw/general-config.json yet — read the legacy file
+            // and immediately persist it at the new per-project location so credentials aren't
+            // lost by the relocation.
+            if (cwDir != null && LEGACY_CONFIG_FILE.exists()) {
+                return try {
+                    val migrated =
+                        gson.fromJson(LEGACY_CONFIG_FILE.readText(), DevConfig::class.java)
+                            ?: DevConfig()
+                    save(migrated, cwDir)
+                    migrated
+                } catch (e: Exception) {
+                    DevConfig()
+                }
+            }
+            return DevConfig()
         }
 
-        fun save(config: DevConfig) {
-            CONFIG_FILE.parentFile.mkdirs()
-            CONFIG_FILE.writeText(gson.toJson(config))
+        fun save(config: DevConfig, cwDir: File?) {
+            val file = configFile(cwDir)
+            file.parentFile?.mkdirs()
+            file.writeText(gson.toJson(config))
         }
-
-        fun configFile(): File = CONFIG_FILE
     }
 }

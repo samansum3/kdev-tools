@@ -60,7 +60,7 @@ object JiraUserService {
     /** Force-fetches assignable users from Jira, overwrites cache, returns fresh list. */
     fun fetchAndCacheUsers(cwDir: File): List<JiraUser> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val project = cfg.jira.project_key
             if (baseUrl.isBlank() || project.isBlank()) return emptyList()
@@ -70,7 +70,7 @@ object JiraUserService {
             val pageSize = 50
             while (true) {
                 val conn = openJiraConn(
-                    cfg,
+                    cwDir,
                     "$baseUrl/rest/api/3/user/assignable/search?project=$project&startAt=$startAt&maxResults=$pageSize"
                 )
                 if (conn.responseCode != 200) break
@@ -103,13 +103,13 @@ object JiraUserService {
      * Updates a ticket's assignee in Jira.
      * Pass null [accountId] to unassign the ticket.
      */
-    fun updateAssignee(ticketKey: String, accountId: String?): Result<Unit> {
+    fun updateAssignee(ticketKey: String, accountId: String?, cwDir: File?): Result<Unit> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val conn = java.net.URL("$baseUrl/rest/api/3/issue/$ticketKey/assignee")
                 .openConnection() as HttpURLConnection
-            JiraAuth.apply(conn)
+            JiraAuth.apply(conn, cwDir)
             conn.setRequestProperty("Content-Type", "application/json")
             conn.setRequestProperty("Accept", "application/json")
             conn.requestMethod = "PUT"
@@ -136,9 +136,9 @@ object JiraUserService {
 
     private fun jsonEscape(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    private fun openJiraConn(cfg: DevConfig, url: String): HttpURLConnection {
+    private fun openJiraConn(cwDir: File, url: String): HttpURLConnection {
         val conn = java.net.URL(url).openConnection() as HttpURLConnection
-        JiraAuth.apply(conn)
+        JiraAuth.apply(conn, cwDir)
         conn.setRequestProperty("Accept", "application/json")
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000

@@ -52,7 +52,10 @@ class StandupPreviewDialog(private val project: Project) : DialogWrapper(project
         val r = report ?: return
         setBusy(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = StandupService.sendToTelegram(r)
+            val result = StandupService.sendToTelegram(
+                r,
+                com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
+            )
             SwingUtilities.invokeLater {
                 setBusy(false)
                 result.onSuccess { super@StandupPreviewDialog.doOKAction() }

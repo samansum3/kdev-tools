@@ -310,7 +310,7 @@ object CardUtils {
 
         return try {
             val conn = java.net.URL(url).openConnection() as HttpURLConnection
-            JiraAuth.apply(conn)
+            JiraAuth.apply(conn, findGitDir(workDir)?.let { File(it, "cw") })
 
             val raw = javax.imageio.ImageIO.read(conn.inputStream) ?: return null
 

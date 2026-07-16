@@ -86,6 +86,9 @@ class PrPanel(
         com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
             ?.let { PrTabsStore.tabStateDir(it, tabId) }
 
+    private fun cwDir(): java.io.File? =
+        com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
+
     private fun loadTabStateFromDisk() {
         val dir = tabStateDir() ?: return
         val baseFile = java.io.File(dir, "base-branch")
@@ -171,49 +174,8 @@ class PrPanel(
                 when {
                     avatarCache.containsKey(login) -> icon = avatarCache[login]
                     else -> {
-                        icon = null; avatarCache[login] = null
-                        ApplicationManager.getApplication().executeOnPooledThread {
-                            val img = try {
-                                val raw =
-                                    javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
-                                if (raw != null) {
-                                    val size = 16
-                                    val circle = java.awt.image.BufferedImage(
-                                        size,
-                                        size,
-                                        java.awt.image.BufferedImage.TYPE_INT_ARGB
-                                    )
-                                    val g = circle.createGraphics()
-                                    g.setRenderingHint(
-                                        java.awt.RenderingHints.KEY_ANTIALIASING,
-                                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON
-                                    )
-                                    g.setRenderingHint(
-                                        java.awt.RenderingHints.KEY_INTERPOLATION,
-                                        java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR
-                                    )
-                                    g.setRenderingHint(
-                                        java.awt.RenderingHints.KEY_RENDERING,
-                                        java.awt.RenderingHints.VALUE_RENDER_QUALITY
-                                    )
-                                    g.fillOval(0, 0, size, size)
-                                    g.composite = java.awt.AlphaComposite.SrcIn
-                                    g.drawImage(
-                                        raw.getScaledInstance(
-                                            size,
-                                            size,
-                                            java.awt.Image.SCALE_SMOOTH
-                                        ), 0, 0, null
-                                    )
-                                    g.dispose()
-                                    ImageIcon(circle)
-                                } else null
-                            } catch (e: Exception) {
-                                null
-                            }
-                            avatarCache[login] = img
-                            SwingUtilities.invokeLater { authorCombo.repaint() }
-                        }
+                        icon = null
+                        loadAuthorAvatar(login) { SwingUtilities.invokeLater { authorCombo.repaint() } }
                     }
                 }
                 return this
@@ -272,7 +234,7 @@ class PrPanel(
         baseBranchCombo.removeAllItems()
         baseBranchCombo.addItem("— none —")
         branches.forEach { baseBranchCombo.addItem(it) }
-        val cfg = DevConfig.load()
+        val cfg = DevConfig.load(cwDir())
         val preferred = previousSelection?.takeIf { it != "— none —" && branches.contains(it) }
             ?: if (hasSavedBaseBranchPref) savedBaseBranch?.takeIf { branches.contains(it) }
             else cfg.git.base_branch.takeIf { branches.contains(it) }
@@ -291,9 +253,9 @@ class PrPanel(
                 return@executeOnPooledThread
             }
             upstreamRepo = repo
-            val cached = AuthorCache.load(repo)
+            val cached = AuthorCache.load(repo, cwDir())
             val authors = if (cached.isNotEmpty()) cached
-            else GitService.fetchPrAuthors(repo).also { AuthorCache.save(repo, it) }
+            else GitService.fetchPrAuthors(repo).also { AuthorCache.save(repo, it, cwDir()) }
             SwingUtilities.invokeLater { populateAuthorCombo(authors); callback?.invoke() }
         }
     }
@@ -308,7 +270,7 @@ class PrPanel(
             }
             upstreamRepo = repo
             val authors = GitService.fetchPrAuthors(repo)
-            AuthorCache.save(repo, authors)
+            AuthorCache.save(repo, authors, cwDir())
             SwingUtilities.invokeLater {
                 populateAuthorCombo(authors); setAuthorSyncSpinning(false); setStatus(
                 ""
@@ -329,6 +291,57 @@ class PrPanel(
             (0 until authorCombo.itemCount).firstOrNull { authorCombo.getItemAt(it) == target }
         authorCombo.selectedIndex = idx ?: 0
         authorCombo.addActionListener(authorListener)
+    }
+
+    /**
+     * Shared avatar loader for GitHub logins — 16px circular icon, GitHub's `login.png`,
+     * cached in memory. Used by both the author combo's renderer and each PR card's author
+     * label. [onLoaded] fires once the icon is ready (skipped entirely on failure).
+     */
+    private fun loadAuthorAvatar(login: String, onLoaded: (ImageIcon) -> Unit) {
+        avatarCache[login]?.let { onLoaded(it); return }
+        if (avatarCache.containsKey(login)) return // load already in flight / failed
+        avatarCache[login] = null
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val img = try {
+                val raw =
+                    javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
+                if (raw != null) {
+                    val size = 16
+                    val circle = java.awt.image.BufferedImage(
+                        size,
+                        size,
+                        java.awt.image.BufferedImage.TYPE_INT_ARGB
+                    )
+                    val g = circle.createGraphics()
+                    g.setRenderingHint(
+                        java.awt.RenderingHints.KEY_ANTIALIASING,
+                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON
+                    )
+                    g.setRenderingHint(
+                        java.awt.RenderingHints.KEY_INTERPOLATION,
+                        java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                    )
+                    g.setRenderingHint(
+                        java.awt.RenderingHints.KEY_RENDERING,
+                        java.awt.RenderingHints.VALUE_RENDER_QUALITY
+                    )
+                    g.fillOval(0, 0, size, size)
+                    g.composite = java.awt.AlphaComposite.SrcIn
+                    g.drawImage(
+                        raw.getScaledInstance(size, size, java.awt.Image.SCALE_SMOOTH), 0, 0, null
+                    )
+                    g.dispose()
+                    ImageIcon(circle)
+                } else null
+            } catch (e: Exception) {
+                null
+            }
+            if (img != null) {
+                avatarCache[login] = img
+                SwingUtilities.invokeLater { onLoaded(img) }
+            }
+        }
     }
 
     private var authorSpinTimer: Timer? = null
@@ -440,7 +453,7 @@ class PrPanel(
                     font = font.deriveFont(font.size - 1f)
                     foreground = JBUI.CurrentTheme.Label.disabledForeground()
                 })
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir())
             prs.forEach { pr ->
                 cardsPanel.add(buildPrCard(pr, repo, cfg.git.can_merge)); cardsPanel.add(
                 Box.createVerticalStrut(6)
@@ -534,6 +547,13 @@ class PrPanel(
             })
             add(JBLabel(pr.author).apply {
                 font = font.deriveFont(font.size - 2f); foreground = authorColor
+                icon = avatarCache[pr.author]
+                iconTextGap = 4
+                if (icon == null) {
+                    loadAuthorAvatar(pr.author) { avatar ->
+                        icon = avatar; iconTextGap = 4; revalidate(); repaint()
+                    }
+                }
             })
             add(JBLabel("  ·  ${pr.timeAgo()}").apply {
                 font = font.deriveFont(font.size - 2f); foreground =

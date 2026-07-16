@@ -47,9 +47,10 @@ object CreatePrService {
     ): Result<CreatePrOutcome> {
         val workDir = project.basePath?.let { File(it) }
             ?: return Result.failure(RuntimeException("No project directory."))
+        val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
 
         // ── Base branch ──────────────────────────────────────────────────
-        val baseBranch = baseBranchOverride?.takeIf { it.isNotBlank() } ?: DevConfig.load().git.base_branch
+        val baseBranch = baseBranchOverride?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
 
         // ── Current branch ───────────────────────────────────────────────
         val branchResult =
@@ -79,12 +80,12 @@ object CreatePrService {
         val extraTicketKeys = collectExtraTicketKeys(workDir, branch, ticketKey, baseBranch)
 
         // ── Clipboard image ──────────────────────────────────────────────
-        val clipboardImageMarkdown = tryUploadClipboardImage(workDir)
+        val clipboardImageMarkdown = tryUploadClipboardImage(workDir, cwDir)
 
         // ── Title & body ─────────────────────────────────────────────────
         val titleKeys = (listOf(ticketKey) + extraTicketKeys).joinToString(", ")
         val prTitle = "$titleKeys: $summary"
-        val jiraUrl = JiraService.ticketUrl(ticketKey)
+        val jiraUrl = JiraService.ticketUrl(ticketKey, cwDir)
         val prBody = buildString {
             if (parentPrRef != null) append("### DEPEND ON $parentPrRef\n")
             append(jiraUrl)
@@ -225,8 +226,8 @@ object CreatePrService {
         return found.toList()
     }
 
-    private fun tryUploadClipboardImage(workDir: File): String? {
-        val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() } ?: return null
+    private fun tryUploadClipboardImage(workDir: File, cwDir: File?): String? {
+        val token = DevConfig.load(cwDir).git.user_session.takeIf { it.isNotBlank() } ?: return null
         val uploaded = ClipboardImage.upload(token, workDir).getOrNull() ?: return null
         return "<img width=\"${uploaded.width}\" height=\"${uploaded.height}\" alt=\"image\" src=\"${uploaded.url}\" />"
     }

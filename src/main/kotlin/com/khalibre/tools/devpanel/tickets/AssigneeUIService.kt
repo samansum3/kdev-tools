@@ -66,7 +66,10 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
                     r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
                 val content = rendererComp.preferredSize
                 val i = getInsets()
-                return Dimension(content.width + i.left + i.right, content.height + i.top + i.bottom)
+                return Dimension(
+                    content.width + i.left + i.right,
+                    content.height + i.top + i.bottom
+                )
             }
 
             override fun doLayout() {
@@ -200,7 +203,9 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
         newAssignee: JiraUserService.JiraUser?
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = JiraUserService.updateAssignee(ticket.key, newAssignee?.accountId)
+            val cwDir = tkPanel.cwDir()
+            val result =
+                JiraUserService.updateAssignee(ticket.key, newAssignee?.accountId, cwDir)
             if (result.isFailure) {
                 SwingUtilities.invokeLater {
                     tkPanel.setStatus("✗ ${ticket.key}: ${result.exceptionOrNull()?.message?.take(80)}")
@@ -211,7 +216,7 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
             // one ticket (scoped via "AND key = <key>" against the active filter JQL) instead
             // of reloading everything.
             val refreshed = try {
-                JiraService.refreshTicket(tkPanel.currentJql, ticket.key)
+                JiraService.refreshTicket(tkPanel.currentJql, ticket.key, cwDir)
             } catch (_: Exception) {
                 null
             }
@@ -227,7 +232,8 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
                     // No longer matches current filters (e.g. an "Unassigned"/"My Tasks" filter
                     // is active and the new assignee no longer satisfies it) — remove it,
                     // leaving every other ticket untouched.
-                    tkPanel.allLoadedTickets = tkPanel.allLoadedTickets.filter { it.key != ticket.key }
+                    tkPanel.allLoadedTickets =
+                        tkPanel.allLoadedTickets.filter { it.key != ticket.key }
                     tkPanel.applySearch()
                 }
             }

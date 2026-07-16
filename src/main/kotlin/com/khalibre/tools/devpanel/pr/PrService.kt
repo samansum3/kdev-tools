@@ -3,7 +3,6 @@ package com.khalibre.tools.devpanel.pr
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
 import java.io.File
@@ -98,8 +97,9 @@ object PrService {
             return Result.failure(RuntimeException("Not inside a git repository."))
         val currentBranch = currentBranchResult.stdout.trim()
 
+        val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
         val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
-        val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load().git.base_branch
+        val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
         val parentBranch = getParentBranch(workDir, target)
         val rebaseBase = parentBranch ?: onto
 
@@ -138,7 +138,10 @@ object PrService {
                 )
             )
 
-        pushBranch(workDir, remote, target)
+        log.appendLine("Pushing $target to $remote...")
+        pushBranch(workDir, remote, target).getOrElse {
+            return Result.failure(RuntimeException("Rebase succeeded but push failed: ${it.message}"))
+        }
 
         log.appendLine("Done. $target rebased onto $remote/$rebaseBase.")
         return Result.success(log.toString().trim())
@@ -147,6 +150,7 @@ object PrService {
     fun updatePr(project: Project, pr: PullRequest, setImg: Boolean = false): Result<String> {
         val workDir = project.basePath?.let { File(it) }
             ?: return Result.failure(RuntimeException("No project directory."))
+        val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
 
         val prNumber = pr.number
         val log = StringBuilder()
@@ -219,7 +223,7 @@ object PrService {
 
         // ── 2. Clipboard image handling (single source of truth) ──────────────
         if (ClipboardImage.hasImage()) {
-            val token = DevConfig.load().git.user_session.takeIf { it.isNotBlank() }
+            val token = DevConfig.load(cwDir).git.user_session.takeIf { it.isNotBlank() }
                 ?: return Result.failure(RuntimeException("GH_SESSION_TOKEN not set — add a GitHub session token in Config"))
             val uploaded = ClipboardImage.upload(token, workDir).getOrElse {
                 return Result.failure(RuntimeException("Image upload failed: ${it.message}"))
@@ -408,19 +412,23 @@ object PrService {
         return result.stdout.trim().takeIf { it.isNotBlank() && result.exitCode == 0 }
     }
 
-    fun pushBranch(workDir: File, remote: String, targetBranch: String) {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCmd(
-                listOf(
-                    "git",
-                    "push",
-                    "--force-with-lease",
-                    remote,
-                    "$targetBranch:$targetBranch"
-                ),
-                workDir
+    fun pushBranch(workDir: File, remote: String, targetBranch: String): Result<String> {
+        val result = runCmd(
+            listOf(
+                "git",
+                "push",
+                "--force-with-lease",
+                remote,
+                "$targetBranch:$targetBranch"
+            ),
+            workDir
+        )
+        return if (result.exitCode == 0) Result.success("Pushed $targetBranch to $remote")
+        else Result.failure(
+            RuntimeException(
+                result.stderr.ifBlank { result.stdout }.ifBlank { "git push failed" }.take(300)
             )
-        }
+        )
     }
 
     private fun getParentBranch(

@@ -197,7 +197,7 @@ class TicketConfigPanel(
                 allStatuses = statuses
                 allTypes = types
                 rebuildAll()
-                applyConfig(DevConfig.load().ticket)
+                applyConfig(DevConfig.load(cw).ticket)
                 setStatus(
                     if (statuses.isEmpty() && types.isEmpty())
                         "No cached data — configure Jira credentials and click Reload." else ""
@@ -564,7 +564,8 @@ class TicketConfigPanel(
         val excludedTypes = activeBadgeNames(excludedTypeBadges, allTypes.map { it.name })
         val developmentTypes = activeBadgeNames(developmentTypeBadges, allTypes.map { it.name })
 
-        val existing = DevConfig.load()
+        val cw = getCwDir()
+        val existing = DevConfig.load(cw)
         DevConfig.save(
             existing.copy(
                 ticket = TicketConfig(
@@ -574,11 +575,11 @@ class TicketConfigPanel(
                     developmentTypes = developmentTypes,
                     itemMode = if (itemModeCompactBadge.getClientProperty("active") == true) "compact" else "default"
                 )
-            )
+            ),
+            cw
         )
         setStatus("Saved ✓")
         Timer(2500) { setStatus("") }.apply { isRepeats = false; start() }
-        val cw = getCwDir()
         if (cw != null) {
             JiraMetaCache.notifyConfigChanged(cw)
         }
@@ -596,7 +597,7 @@ class TicketConfigPanel(
                 SwingUtilities.invokeLater {
                     allStatuses = statuses.map { it.name }
                     rebuildAll()
-                    applyConfig(DevConfig.load().ticket)
+                    applyConfig(DevConfig.load(cw).ticket)
                     setStatus(if (statuses.isEmpty()) "No statuses returned — check Jira credentials." else "Statuses reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
                     JiraMetaCache.notifyConfigChanged(cw)
@@ -615,7 +616,7 @@ class TicketConfigPanel(
                 SwingUtilities.invokeLater {
                     allTypes = types
                     rebuildAll()
-                    applyConfig(DevConfig.load().ticket)
+                    applyConfig(DevConfig.load(cw).ticket)
                     setStatus(if (types.isEmpty()) "No types returned — check Jira credentials." else "Types reloaded ✓")
                     Timer(3000) { setStatus("") }.apply { isRepeats = false; start() }
                     JiraMetaCache.notifyConfigChanged(cw)

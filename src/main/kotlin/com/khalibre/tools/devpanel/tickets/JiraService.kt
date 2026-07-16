@@ -62,9 +62,10 @@ object JiraService {
         descriptionHtml: String? = null,
         parentKey: String?,
         typeName: String?,
-        subtaskTypeId: String?
+        subtaskTypeId: String?,
+        cwDir: File?
     ): Result<JiraCreatedIssue> {
-        val cfg = DevConfig.load()
+        val cfg = DevConfig.load(cwDir)
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         val projectKey = cfg.jira.project_key
         if (baseUrl.isBlank() || projectKey.isBlank())
@@ -102,7 +103,7 @@ object JiraService {
         return try {
             val request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI("$baseUrl/rest/api/3/issue"))
-                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("Authorization", JiraAuth.basicHeaderValue(cwDir))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(Gson().toJson(payload)))
@@ -136,9 +137,10 @@ object JiraService {
         ticketKey: String,
         file: File,
         filename: String,
-        mimeType: String = "image/png"
+        mimeType: String = "image/png",
+        cwDir: File? = null
     ): Result<JiraAttachment> {
-        val cfg = DevConfig.load()
+        val cfg = DevConfig.load(cwDir)
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
 
@@ -152,7 +154,7 @@ object JiraService {
 
             val request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI("$baseUrl/rest/api/3/issue/$ticketKey/attachments"))
-                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("Authorization", JiraAuth.basicHeaderValue(cwDir))
                 .header("X-Atlassian-Token", "no-check")
                 .header("Content-Type", "multipart/form-data; boundary=$boundary")
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(bodyBytes))
@@ -182,8 +184,8 @@ object JiraService {
     /** Overwrites [ticketKey]'s description with [descriptionAdf] via REST PUT — used to patch in
      *  the final description (with real `media` references) after uploading embedded images,
      *  since they can't be uploaded until the ticket — and its numeric id — exist. */
-    fun updateDescription(ticketKey: String, descriptionAdf: JsonObject): Result<Unit> {
-        val cfg = DevConfig.load()
+    fun updateDescription(ticketKey: String, descriptionAdf: JsonObject, cwDir: File? = null): Result<Unit> {
+        val cfg = DevConfig.load(cwDir)
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
 
@@ -194,7 +196,7 @@ object JiraService {
         return try {
             val request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI("$baseUrl/rest/api/3/issue/$ticketKey"))
-                .header("Authorization", JiraAuth.basicHeaderValue())
+                .header("Authorization", JiraAuth.basicHeaderValue(cwDir))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
                 .PUT(java.net.http.HttpRequest.BodyPublishers.ofString(Gson().toJson(payload)))
@@ -214,7 +216,7 @@ object JiraService {
         }
     }
 
-    fun buildJql(filters: TicketFilters, currentUserEmail: String?): String {
+    fun buildJql(filters: TicketFilters, currentUserEmail: String?, cwDir: File?): String {
         val clauses = mutableListOf<String>()
 
         // Scope: parent keys OR linked-to keys OR fix version
@@ -243,7 +245,7 @@ object JiraService {
             filters.activeStatuses.isNotEmpty() ->
                 clauses += "status IN (${filters.activeStatuses.joinToString(",") { "\"$it\"" }})"
 
-            filters.hideDone -> clauses += buildHideDoneClause()
+            filters.hideDone -> clauses += buildHideDoneClause(cwDir)
         }
 
         // Not-status filter (always applied, independent of status/hideDone)
@@ -269,8 +271,8 @@ object JiraService {
      * Types with no configured done statuses are left unrestricted.
      * If no types are configured at all, returns an empty string (no filtering).
      */
-    private fun buildHideDoneClause(): String {
-        val ticketCfg = DevConfig.load().ticket
+    private fun buildHideDoneClause(cwDir: File?): String {
+        val ticketCfg = DevConfig.load(cwDir).ticket
         val doneMap = ticketCfg.doneStatusesByType.filter { it.value.isNotEmpty() }
         if (doneMap.isEmpty()) return ""
 
@@ -281,7 +283,7 @@ object JiraService {
         return terms.joinToString(" AND ") { "($it)" }
     }
 
-    fun searchTickets(jql: String): List<JiraTicket> {
+    fun searchTickets(jql: String, cwDir: File?): List<JiraTicket> {
         val result = PrService.runCmd(
             listOf(
                 "acli", "jira", "workitem", "search",
@@ -298,7 +300,7 @@ object JiraService {
                 }"
             )
         File("/tmp/result.json").writeText(result.stdout) // Debug output
-        return parseAcliResponse(result.stdout)
+        return parseAcliResponse(result.stdout, cwDir)
     }
 
     /**
@@ -312,7 +314,7 @@ object JiraService {
      * Returns the updated [JiraTicket], or null if the ticket no longer matches the current
      * filters (e.g. an "Unassigned" filter was active and the ticket now has an assignee).
      */
-    fun refreshTicket(currentJql: String, ticketKey: String): JiraTicket? {
+    fun refreshTicket(currentJql: String, ticketKey: String, cwDir: File?): JiraTicket? {
         val scopedJql = scopeJqlToKey(currentJql, ticketKey)
         val result = PrService.runCmd(
             listOf(
@@ -323,7 +325,7 @@ object JiraService {
             )
         )
         if (result.exitCode != 0 || result.stdout.isBlank()) return null
-        return parseAcliResponse(result.stdout).firstOrNull()
+        return parseAcliResponse(result.stdout, cwDir).firstOrNull()
     }
 
     /**
@@ -343,9 +345,9 @@ object JiraService {
     /**
      * Returns list of (targetStatus, transitionName) pairs.
      */
-    fun fetchAvailableTransitions(ticketKey: String): List<Pair<String, String>> {
+    fun fetchAvailableTransitions(ticketKey: String, cwDir: File?): List<Pair<String, String>> {
         return try {
-            val cfg = DevConfig.load()
+            val cfg = DevConfig.load(cwDir)
             val baseUrl = cfg.jira.base_url.trimEnd('/')
             val auth = java.util.Base64.getEncoder()
                 .encodeToString("${cfg.jira.email}:${cfg.jira.api_token}".toByteArray())
@@ -390,7 +392,7 @@ object JiraService {
         return transitionToInProgress(ticketKey)
     }
 
-    fun currentUserEmail(): String? = DevConfig.load().jira.email.takeIf { it.isNotBlank() }
+    fun currentUserEmail(cwDir: File?): String? = DevConfig.load(cwDir).jira.email.takeIf { it.isNotBlank() }
 
     /**
      * `acli jira workitem view <key> --fields summary --json` — same call the `create-pr`
@@ -447,12 +449,12 @@ object JiraService {
     fun transitionToDeployedUat(ticketKey: String) = transitionTicket(ticketKey, "Deployed to UAT")
     fun transitionToMerged(ticketKey: String) = transitionTicket(ticketKey, "Merged")
 
-    fun ticketUrl(ticketKey: String): String =
-        "${DevConfig.load().jira.base_url.trimEnd('/')}/browse/$ticketKey"
+    fun ticketUrl(ticketKey: String, cwDir: File?): String =
+        "${DevConfig.load(cwDir).jira.base_url.trimEnd('/')}/browse/$ticketKey"
 
-    fun openTicketInBrowser(ticketKey: String) {
+    fun openTicketInBrowser(ticketKey: String, cwDir: File?) {
         try {
-            java.awt.Desktop.getDesktop().browse(java.net.URI(ticketUrl(ticketKey)))
+            java.awt.Desktop.getDesktop().browse(java.net.URI(ticketUrl(ticketKey, cwDir)))
         } catch (_: Exception) {
         }
     }
@@ -478,14 +480,14 @@ object JiraService {
         }
     }
 
-    private fun parseAcliResponse(body: String): List<JiraTicket> {
+    private fun parseAcliResponse(body: String, cwDir: File?): List<JiraTicket> {
         val root = JsonParser.parseString(body)
         val issues = if (root.isJsonArray) root.asJsonArray
         else root.asJsonObject.getAsJsonArray("issues") ?: return emptyList()
-        return parseIssueArray(issues)
+        return parseIssueArray(issues, cwDir)
     }
 
-    private fun parseIssueArray(issues: com.google.gson.JsonArray): List<JiraTicket> {
+    private fun parseIssueArray(issues: com.google.gson.JsonArray, cwDir: File?): List<JiraTicket> {
         return issues.mapNotNull { el ->
             try {
                 val obj = el.asJsonObject
@@ -514,9 +516,9 @@ object JiraService {
                     assigneeEmail = assignee?.get("emailAddress")?.asString,
                     assigneeAccountId = assignee?.get("accountId")?.asString,
                     issueType = issueTypeObj?.get("name")?.asString,
-                    issueTypeIconUrl = fixIconUrl(issueTypeObj?.get("iconUrl")?.asString),
+                    issueTypeIconUrl = fixIconUrl(issueTypeObj?.get("iconUrl")?.asString, cwDir),
                     priority = priorityObj?.get("name")?.asString,
-                    priorityIconUrl = fixIconUrl(priorityObj?.get("iconUrl")?.asString)
+                    priorityIconUrl = fixIconUrl(priorityObj?.get("iconUrl")?.asString, cwDir)
                 )
             } catch (_: Exception) {
                 null
@@ -524,5 +526,5 @@ object JiraService {
         }
     }
 
-    private fun fixIconUrl(url: String?) = IconUtils.fixIconUrl(url)
+    private fun fixIconUrl(url: String?, cwDir: File?) = IconUtils.fixIconUrl(url, cwDir)
 }

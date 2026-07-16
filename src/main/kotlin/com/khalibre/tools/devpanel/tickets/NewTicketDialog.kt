@@ -297,7 +297,8 @@ class NewTicketDialog(
                 descriptionAdf = creationAdf,
                 parentKey = parent,
                 typeName = if (parent == null) typeName else null,
-                subtaskTypeId = subtaskId
+                subtaskTypeId = subtaskId,
+                cwDir = cwDir
             )
 
             var successMessage: String? = null
