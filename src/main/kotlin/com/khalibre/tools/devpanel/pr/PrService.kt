@@ -174,6 +174,12 @@ object PrService {
         val prNumber = pr.number
         val log = StringBuilder()
 
+        // Push in background
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val targetRemote = getRemote(pr.headRefName)
+            pushBranch(workDir, targetRemote, pr.headRefName)
+        }
+
         // ── Fetch PR ─────────────────────────────────────────────────────────
         log.appendLine("Fetching PR #$prNumber...")
         val prViewResult = runCmd(
