@@ -1,5 +1,6 @@
 package com.khalibre.tools.devpanel.config
 
+import com.google.gson.Gson
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
@@ -8,6 +9,7 @@ import com.khalibre.tools.devpanel.tickets.TicketsPanel
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.io.File
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -73,7 +75,35 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         subTabs.addTab("PR Config", pcp)
         subTabs.addTab("Ticket Config", tcp)
 
+        restoreSelectedSubTab()
+        subTabs.addChangeListener { saveSelectedSubTab() }
+
         add(subTabs, BorderLayout.CENTER)
+    }
+
+    // ── Selected sub-tab persistence ────────────────────────────────────────────
+
+    private fun subTabStateFile(): File? = cwDir()?.let { File(it, "config-ui-state.json") }
+
+    private fun restoreSelectedSubTab() {
+        val f = subTabStateFile() ?: return
+        if (!f.exists()) return
+        try {
+            @Suppress("UNCHECKED_CAST")
+            val map = Gson().fromJson(f.readText(), Map::class.java) as? Map<String, Any> ?: return
+            val index = (map["selectedSubTab"] as? Double)?.toInt() ?: return
+            if (index in 0 until subTabs.tabCount) subTabs.selectedIndex = index
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun saveSelectedSubTab() {
+        val f = subTabStateFile() ?: return
+        try {
+            f.parentFile?.mkdirs()
+            f.writeText(Gson().toJson(mapOf("selectedSubTab" to subTabs.selectedIndex)))
+        } catch (_: Exception) {
+        }
     }
 
     // ── General panel ─────────────────────────────────────────────────────────
