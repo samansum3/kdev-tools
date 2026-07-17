@@ -1,6 +1,7 @@
 package com.khalibre.tools.devpanel.config
 
 import com.google.gson.Gson
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
@@ -28,6 +29,21 @@ class PrConfigPanel(
 ) : JPanel(BorderLayout()) {
 
     private val baseBranchCombo = JComboBox<String>()
+    private val baseBranchSyncButton = JButton(AllIcons.Actions.Refresh).apply {
+        toolTipText = "Fetch upstream branches (git fetch upstream --prune)"
+        isFocusPainted = false; isBorderPainted = false; isContentAreaFilled = false
+        preferredSize = Dimension(24, 24); minimumSize = Dimension(24, 24); maximumSize =
+        Dimension(24, 24)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+    }
+    private var baseBranchSpinTimer: Timer? = null
+    private val baseBranchSpinIcons = listOf(
+        AllIcons.Actions.Refresh,
+        AllIcons.Process.Step_1,
+        AllIcons.Process.Step_2,
+        AllIcons.Process.Step_3,
+        AllIcons.Process.Step_4
+    )
     private val userSessionField = JBPasswordField()
     private val avatarCache = mutableMapOf<String, ImageIcon?>()
 
@@ -84,9 +100,19 @@ class PrConfigPanel(
         }
 
         fullRow(0, fieldLabel("Base branch"))
-        fullRow(1, baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+        val baseBranchRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, 28)
+            add(baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+            add(Box.createHorizontalStrut(4))
+            add(baseBranchSyncButton)
+        }
+        fullRow(1, baseBranchRow)
         fullRow(2, Box.createVerticalStrut(JBUI.scale(8)))
         com.intellij.ui.ComboboxSpeedSearch.installOn(baseBranchCombo)
+        baseBranchSyncButton.addActionListener { fetchUpstreamAndReload() }
 
         fullRow(3, fieldLabel("User session (cookie for PR upload)"))
         fullRow(4, userSessionField)
@@ -298,6 +324,43 @@ class PrConfigPanel(
     }
 
     // ── Branch / author loading ─────────────────────────────────────────────────
+
+    private fun setBaseBranchSyncSpinning(spinning: Boolean) {
+        baseBranchSpinTimer?.stop(); baseBranchSpinTimer = null
+        if (spinning) {
+            var frame = 0
+            baseBranchSpinTimer = Timer(120) {
+                baseBranchSyncButton.icon = baseBranchSpinIcons[frame++ % baseBranchSpinIcons.size]
+            }.also { it.start() }
+            baseBranchSyncButton.isEnabled = false
+        } else {
+            baseBranchSyncButton.icon = AllIcons.Actions.Refresh
+            baseBranchSyncButton.isEnabled = true
+        }
+    }
+
+    /** Runs `git fetch upstream --prune` then reloads the base-branch combo, same as PR Tools'
+     *  base: refresh button. */
+    private fun fetchUpstreamAndReload() {
+        setBaseBranchSyncSpinning(true)
+        statusLabel.text = "  Fetching upstream…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val workDir = project.basePath?.let { File(it) }
+                PrService.runCmd(listOf("git", "fetch", "upstream", "--prune"), workDir)
+                SwingUtilities.invokeLater {
+                    setBaseBranchSyncSpinning(false)
+                    statusLabel.text = ""
+                    loadUpstreamBranches()
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    setBaseBranchSyncSpinning(false)
+                    statusLabel.text = "  Fetch failed: ${e.message?.take(60)}"
+                }
+            }
+        }
+    }
 
     private fun loadUpstreamBranches() {
         ApplicationManager.getApplication().executeOnPooledThread {
