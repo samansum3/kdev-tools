@@ -2,6 +2,8 @@ package com.khalibre.tools.devpanel.pr
 
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
+import com.khalibre.tools.devpanel.pr.CreatePrService.collectExtraTicketKeys
+import com.khalibre.tools.devpanel.pr.CreatePrService.detectParentPrRef
 import com.khalibre.tools.devpanel.tickets.JiraService
 import java.io.File
 
@@ -50,7 +52,8 @@ object CreatePrService {
         val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
 
         // ── Base branch ──────────────────────────────────────────────────
-        val baseBranch = baseBranchOverride?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
+        val baseBranch =
+            baseBranchOverride?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
 
         // ── Current branch ───────────────────────────────────────────────
         val branchResult =
@@ -71,7 +74,8 @@ object CreatePrService {
         if (!CANONICAL_KEY_RE.matches(ticketKey)) ticketKey = branch
 
         // ── Jira summary ─────────────────────────────────────────────────
-        val summary = JiraService.fetchTicketSummary(ticketKey).getOrElse { return Result.failure(it) }
+        val summary =
+            JiraService.fetchTicketSummary(ticketKey).getOrElse { return Result.failure(it) }
 
         // ── Parent branch / parent PR ───────────────────────────────────
         val parentPrRef = detectParentPrRef(workDir, branch)
@@ -96,23 +100,36 @@ object CreatePrService {
         val upstreamCheck =
             PrService.runCmd(listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}"), workDir)
         if (upstreamCheck.exitCode != 0) {
-            val push = PrService.runCmd(listOf("git", "push", "--set-upstream", "origin", branch), workDir)
+            val push =
+                PrService.runCmd(listOf("git", "push", "--set-upstream", "origin", branch), workDir)
             if (push.exitCode != 0)
-                return Result.failure(RuntimeException(push.stderr.ifBlank { "git push failed" }.take(300)))
+                return Result.failure(RuntimeException(push.stderr.ifBlank { "git push failed" }
+                    .take(300)))
         }
 
         // ── gh pr create ────────────────────────────────────────────────
         val ghArgs = mutableListOf("gh", "pr", "create", "--title", prTitle, "--body", prBody)
         if (draft) ghArgs += "--draft"
         if (!baseBranch.isNullOrBlank()) ghArgs += listOf("--base", baseBranch)
+
+        val defaultReviewers = DevConfig.load(cwDir).git.default_reviewers
+        if (defaultReviewers.isNotEmpty()) {
+            val currentUser = PrService.currentGhUser()
+            val reviewers = defaultReviewers.filter { it != currentUser }
+            if (reviewers.isNotEmpty())
+                ghArgs += listOf("--reviewer", reviewers.joinToString(","))
+        }
+
         val createResult = PrService.runCmd(ghArgs, workDir)
         if (createResult.exitCode != 0)
             return Result.failure(
                 RuntimeException(
-                    createResult.stderr.ifBlank { createResult.stdout }.ifBlank { "gh pr create failed" }.take(300)
+                    createResult.stderr.ifBlank { createResult.stdout }
+                        .ifBlank { "gh pr create failed" }.take(300)
                 )
             )
-        val prUrl = createResult.stdout.lines().map { it.trim() }.lastOrNull { it.startsWith("http") }
+        val prUrl =
+            createResult.stdout.lines().map { it.trim() }.lastOrNull { it.startsWith("http") }
 
         // ── Transition ticket status to "PR Open" ─────────────────────────
         val transitioned = JiraService.transitionTicket(ticketKey, "PR Open").isSuccess
@@ -126,7 +143,13 @@ object CreatePrService {
      *  (know where to stop walking this branch's own commit log). */
     private fun buildTicketBranchTipMap(workDir: File, excludeBranch: String): Map<String, String> {
         val refsResult = PrService.runCmd(
-            listOf("git", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes/origin"),
+            listOf(
+                "git",
+                "for-each-ref",
+                "--format=%(objectname) %(refname)",
+                "refs/heads",
+                "refs/remotes/origin"
+            ),
             workDir
         )
         if (refsResult.exitCode != 0) return emptyMap()
@@ -155,17 +178,32 @@ object CreatePrService {
      * [PrService.updatePr] passes an explicit `origin/<branch>` ref instead, since the PR being
      * updated isn't necessarily the branch that's currently checked out locally.
      */
-    internal fun detectParentPrRef(workDir: File, currentBranch: String, logRef: String = "HEAD"): String? {
+    internal fun detectParentPrRef(
+        workDir: File,
+        currentBranch: String,
+        logRef: String = "HEAD"
+    ): String? {
         val tipMap = buildTicketBranchTipMap(workDir, currentBranch)
         if (tipMap.isEmpty()) return null
 
-        val logResult = PrService.runCmd(listOf("git", "log", "--pretty=format:%H", logRef), workDir)
+        val logResult =
+            PrService.runCmd(listOf("git", "log", "--pretty=format:%H", logRef), workDir)
         if (logResult.exitCode != 0) return null
         val parentBranch = logResult.stdout.lines().drop(1) // skip logRef's own commit
             .firstNotNullOfOrNull { tipMap[it] } ?: return null
 
         val prResult = PrService.runCmd(
-            listOf("gh", "pr", "list", "--head", parentBranch, "--json", "number", "--jq", ".[0].number"),
+            listOf(
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                parentBranch,
+                "--json",
+                "number",
+                "--jq",
+                ".[0].number"
+            ),
             workDir
         )
         val num = prResult.stdout.trim()
@@ -194,13 +232,17 @@ object CreatePrService {
             val local = PrService.runCmd(listOf("git", "merge-base", "HEAD", base), workDir)
             if (local.exitCode == 0 && local.stdout.isNotBlank()) local.stdout.trim()
             else {
-                val remote = PrService.runCmd(listOf("git", "merge-base", "HEAD", "origin/$base"), workDir)
+                val remote =
+                    PrService.runCmd(listOf("git", "merge-base", "HEAD", "origin/$base"), workDir)
                 if (remote.exitCode == 0 && remote.stdout.isNotBlank()) remote.stdout.trim() else null
             }
         }
 
         val logResult =
-            PrService.runCmd(listOf("git", "log", "--first-parent", "--pretty=format:%H", "HEAD"), workDir)
+            PrService.runCmd(
+                listOf("git", "log", "--first-parent", "--pretty=format:%H", "HEAD"),
+                workDir
+            )
         if (logResult.exitCode != 0) return emptyList()
 
         // Walk newest -> oldest, stopping at whichever boundary is nearer to HEAD.
@@ -215,7 +257,8 @@ object CreatePrService {
         // Re-walk oldest -> newest so extra keys come out in the order the work happened.
         val found = LinkedHashSet<String>()
         ownHashes.asReversed().forEach { hash ->
-            val msgResult = PrService.runCmd(listOf("git", "log", "-1", "--pretty=format:%B", hash), workDir)
+            val msgResult =
+                PrService.runCmd(listOf("git", "log", "-1", "--pretty=format:%B", hash), workDir)
             if (msgResult.exitCode != 0) return@forEach
             msgResult.stdout.lines().forEach { line ->
                 JIRA_BROWSE_URL_RE.find(line)?.groupValues?.get(1)?.let { key ->
