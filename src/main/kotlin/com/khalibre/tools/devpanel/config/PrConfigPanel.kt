@@ -75,7 +75,7 @@ class PrConfigPanel(
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
         }
 
-        fun fullRow(row: Int, comp: JComponent) {
+        fun fullRow(row: Int, comp: Component) {
             form.add(comp, GridBagConstraints().apply {
                 gridx = 0; gridy = row; gridwidth = 1
                 fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
@@ -85,25 +85,32 @@ class PrConfigPanel(
 
         fullRow(0, fieldLabel("Base branch"))
         fullRow(1, baseBranchCombo.apply { maximumSize = Dimension(Int.MAX_VALUE, 28) })
+        fullRow(2, Box.createVerticalStrut(JBUI.scale(8)))
         com.intellij.ui.ComboboxSpeedSearch.installOn(baseBranchCombo)
 
-        fullRow(2, fieldLabel("User session (cookie for PR upload)"))
-        fullRow(3, userSessionField)
+        fullRow(3, fieldLabel("User session (cookie for PR upload)"))
+        fullRow(4, userSessionField)
+        fullRow(5, Box.createVerticalStrut(JBUI.scale(8)))
 
-        fullRow(4, fieldLabel("Has merge permission"))
+        fullRow(6, fieldLabel("Has merge permission"))
         val itemModeRow = JPanel(WrapLayout(FlowLayout.LEFT, 4, 3)).apply {
-            isOpaque = false; alignmentX = LEFT_ALIGNMENT
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
         }
         itemModeRow.add(noMergePermission)
         itemModeRow.add(hasMergePermission)
-        fullRow(5, itemModeRow)
-        fullRow(7, buildReviewersSection())
+        fullRow(7, itemModeRow)
+        fullRow(8, Box.createVerticalStrut(JBUI.scale(8)))
 
+        fullRow(9, buildReviewersSection())
 
         // Spacer
         form.add(JPanel(), GridBagConstraints().apply {
-            gridx = 0; gridy = 8; gridwidth = 1
-            weighty = 1.0; fill = GridBagConstraints.BOTH
+            gridx = 0
+            gridy = 10
+            gridwidth = 1
+            weighty = 1.0
+            fill = GridBagConstraints.BOTH
         })
 
         val scroll = JBScrollPane(form).apply {
@@ -142,7 +149,7 @@ class PrConfigPanel(
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         }
 
-        val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+        val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 4)).apply {
             isOpaque = false
             alignmentX = LEFT_ALIGNMENT
             maximumSize = Dimension(Int.MAX_VALUE, 24)
@@ -232,7 +239,10 @@ class PrConfigPanel(
     }
 
     /** Reviewer badge: same toggle style as other config badges, plus an author avatar. */
-    private fun makeReviewerBadge(author: AuthorCache.CachedAuthor, initiallyActive: Boolean): JLabel {
+    private fun makeReviewerBadge(
+        author: AuthorCache.CachedAuthor,
+        initiallyActive: Boolean
+    ): JLabel {
         val badge = makeConfigBadge(author.login, initiallyActive)
         badge.iconTextGap = 4
         loadAuthorAvatar(author.login) { icon ->
@@ -255,14 +265,18 @@ class PrConfigPanel(
         avatarCache[login] = null
         ApplicationManager.getApplication().executeOnPooledThread {
             val icon = try {
-                val raw = javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
+                val raw =
+                    javax.imageio.ImageIO.read(java.net.URL("https://github.com/$login.png?size=32"))
                 if (raw != null) {
                     val size = 14
                     val circle = java.awt.image.BufferedImage(
                         size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB
                     )
                     val g = circle.createGraphics()
-                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g.setRenderingHint(
+                        RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON
+                    )
                     g.setRenderingHint(
                         RenderingHints.KEY_INTERPOLATION,
                         RenderingHints.VALUE_INTERPOLATION_BILINEAR
