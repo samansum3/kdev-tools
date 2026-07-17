@@ -1294,7 +1294,7 @@ class TicketsPanel(
 
                 else -> {
                     label.background = Color(225, 223, 218); label.foreground =
-                        Color(110, 108, 103); label.border = JBUI.Borders.empty(3, 8)
+                        Color(100, 98, 93); label.border = JBUI.Borders.empty(3, 8)
                 }
             }
         }
