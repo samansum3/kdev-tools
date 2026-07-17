@@ -482,7 +482,7 @@ object PrService {
             .takeIf { result.exitCode == 0 && it.isNotBlank() }
     }
 
-    private fun getRemote(branchName: String): String {
+    internal fun getRemote(branchName: String): String {
         // Existing remote selection logic: ticket-shaped `onto` → origin, else upstream
         val remote = if (Regex("^[A-Z]+-[0-9]+$").matches(branchName)) "origin" else "upstream"
         return remote

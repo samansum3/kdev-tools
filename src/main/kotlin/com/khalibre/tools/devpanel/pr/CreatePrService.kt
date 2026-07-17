@@ -232,8 +232,20 @@ object CreatePrService {
             val local = PrService.runCmd(listOf("git", "merge-base", "HEAD", base), workDir)
             if (local.exitCode == 0 && local.stdout.isNotBlank()) local.stdout.trim()
             else {
+                // Base branches aren't necessarily on "origin" — e.g. a base branch like
+                // "dev-wf-s9" lives on "upstream" per the same remote convention PrService uses
+                // elsewhere (ticket-shaped branch names → origin, everything else → upstream).
+                // Falling back to a hardcoded "origin/$base" here meant the merge-base lookup
+                // silently failed for such base branches, leaving this walk with no boundary
+                // there — so it kept walking back through the base branch's own history,
+                // collecting unrelated ticket keys, until it happened to hit another ticket
+                // branch's tip.
+                val remoteName = PrService.getRemote(base)
                 val remote =
-                    PrService.runCmd(listOf("git", "merge-base", "HEAD", "origin/$base"), workDir)
+                    PrService.runCmd(
+                        listOf("git", "merge-base", "HEAD", "$remoteName/$base"),
+                        workDir
+                    )
                 if (remote.exitCode == 0 && remote.stdout.isNotBlank()) remote.stdout.trim() else null
             }
         }
