@@ -460,7 +460,7 @@ object PrService {
         workDir: File,
         branchName: String
     ): String? {
-        val parentPr = CreatePrService.detectParentPrRef(workDir, branchName)
+        val parentPr = CreatePrService.detectParentPrRef(workDir, branchName, logRef = branchName)
             ?.removePrefix("#")
             ?: return null
 

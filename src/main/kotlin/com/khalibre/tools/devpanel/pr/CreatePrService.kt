@@ -175,8 +175,8 @@ object CreatePrService {
         return tipMap
     }
 
-    /** True if `gh` reports an open PR whose head is [branchName]. */
-    private fun hasOpenPr(workDir: File, branchName: String): Boolean {
+    /** The open PR number whose head is [branchName], or null if there isn't one. */
+    private fun getOpenPrNumber(workDir: File, branchName: String): String? {
         val prResult = PrService.runCmd(
             listOf(
                 "gh",
@@ -192,17 +192,27 @@ object CreatePrService {
             workDir
         )
         val num = prResult.stdout.trim()
-        return prResult.exitCode == 0 && num.isNotBlank() && num != "null"
+        return num.takeIf { prResult.exitCode == 0 && it.isNotBlank() && it != "null" }
     }
 
+    /** True if `gh` reports an open PR whose head is [branchName]. */
+    private fun hasOpenPr(workDir: File, branchName: String): Boolean =
+        getOpenPrNumber(workDir, branchName) != null
+
     /**
-     * Finds the nearest ancestor commit (excluding [logRef]'s own tip) that is also the tip of
-     * another ticket-shaped branch, then looks up whether that branch has an open PR. Mirrors the
-     * script's BRANCH_TIP_MAP / walk-the-log approach.
+     * Walks [logRef]'s own `--first-parent` history (excluding its own tip commit) one commit at
+     * a time, same boundary rules as [collectExtraTicketKeys]:
      *
-     * [logRef] defaults to `HEAD` (the create-pr case: walking the currently checked-out branch).
-     * [PrService.updatePr] passes an explicit `origin/<branch>` ref instead, since the PR being
-     * updated isn't necessarily the branch that's currently checked out locally.
+     *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? If it has an open PR,
+     *    that's the parent to report. If it doesn't (a stale/never-opened branch ref), keep
+     *    walking past it and check the next branch tip encountered.
+     *  - Hits the tip of any other branch (e.g. "dev-wf-s9", a base/integration branch) — stop
+     *    immediately with no parent: this branch isn't stacked on anything, it's just based
+     *    directly on the base branch.
+     *
+     * [logRef] should be the branch actually being inspected — not necessarily `HEAD`, since the
+     * caller (e.g. rebasing a branch other than the one currently checked out) may be inspecting
+     * a branch that isn't checked out at all.
      */
     internal fun detectParentPrRef(
         workDir: File,
@@ -210,35 +220,25 @@ object CreatePrService {
         logRef: String = "HEAD"
     ): String? {
         val tipMap = buildBranchTipMap(workDir, currentBranch)
-            .mapNotNull { (hash, names) ->
-                names.firstOrNull { TICKET_KEY_RE.matches(it) }?.let { hash to it }
-            }
-            .toMap()
-        if (tipMap.isEmpty()) return null
 
         val logResult =
-            PrService.runCmd(listOf("git", "log", "--pretty=format:%H", logRef), workDir)
+            PrService.runCmd(
+                listOf("git", "log", "--first-parent", "--pretty=format:%H", logRef),
+                workDir
+            )
         if (logResult.exitCode != 0) return null
-        val parentBranch = logResult.stdout.lines().drop(1) // skip logRef's own commit
-            .firstNotNullOfOrNull { tipMap[it] } ?: return null
 
-        val prResult = PrService.runCmd(
-            listOf(
-                "gh",
-                "pr",
-                "list",
-                "--head",
-                parentBranch,
-                "--json",
-                "number",
-                "--jq",
-                ".[0].number"
-            ),
-            workDir
-        )
-        val num = prResult.stdout.trim()
-        if (prResult.exitCode != 0 || num.isBlank() || num == "null") return null
-        return "#$num"
+        for (hash in logResult.stdout.lines().drop(1)
+            .filter { it.isNotBlank() }) { // skip logRef's own commit
+            val namesHere = tipMap[hash] ?: continue
+            for (name in namesHere) {
+                if (!TICKET_KEY_RE.matches(name)) return null // base/integration branch — no parent.
+                val num = getOpenPrNumber(workDir, name)
+                if (num != null) return "#$num" // stacked on a real, already-open PR.
+                // No PR yet: not a real boundary — keep walking past it.
+            }
+        }
+        return null
     }
 
     /**
