@@ -3,7 +3,6 @@ package com.khalibre.tools.devpanel.pr
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
 import com.khalibre.tools.devpanel.pr.CreatePrService.collectExtraTicketKeys
-import com.khalibre.tools.devpanel.pr.CreatePrService.detectParentPrRef
 import com.khalibre.tools.devpanel.tickets.JiraService
 import java.io.File
 
@@ -81,7 +80,7 @@ object CreatePrService {
         val parentPrRef = detectParentPrRef(workDir, branch)
 
         // ── Extra ticket keys pulled in from this branch's own commits ────
-        val extraTicketKeys = collectExtraTicketKeys(workDir, branch, ticketKey, baseBranch)
+        val extraTicketKeys = collectExtraTicketKeys(workDir, branch, ticketKey)
 
         // ── Clipboard image ──────────────────────────────────────────────
         val clipboardImageMarkdown = tryUploadClipboardImage(workDir, cwDir)
@@ -138,36 +137,62 @@ object CreatePrService {
         return Result.success(CreatePrOutcome(ticketKey, branch, prUrl, transitioned))
     }
 
-    /** Maps commit hash -> branch name for every locally-known branch (local or origin) whose
-     *  name looks like a Jira ticket key, other than [excludeBranch] itself. Shared by
-     *  [detectParentPrRef] (find what this branch is stacked on) and [collectExtraTicketKeys]
-     *  (know where to stop walking this branch's own commit log). */
-    private fun buildTicketBranchTipMap(workDir: File, excludeBranch: String): Map<String, String> {
+    /** Maps commit hash -> every branch name (local, or on any remote) pointing at that commit,
+     *  other than [excludeBranch] itself. Unlike a ticket-key-only map, this includes ordinary
+     *  branches like "dev-wf-s9" too — needed so [collectExtraTicketKeys] can recognize *any*
+     *  branch tip it walks past, not just ticket-shaped ones. Scans every remote (not just
+     *  "origin"), since a base branch commonly lives on "upstream" instead. */
+    private fun buildBranchTipMap(workDir: File, excludeBranch: String): Map<String, List<String>> {
         val refsResult = PrService.runCmd(
             listOf(
                 "git",
                 "for-each-ref",
                 "--format=%(objectname) %(refname)",
                 "refs/heads",
-                "refs/remotes/origin"
+                "refs/remotes"
             ),
             workDir
         )
         if (refsResult.exitCode != 0) return emptyMap()
 
-        val tipMap = mutableMapOf<String, String>()
+        val tipMap = mutableMapOf<String, MutableList<String>>()
         refsResult.stdout.lines().forEach { line ->
             val parts = line.trim().split(Regex("\\s+"))
             if (parts.size < 2) return@forEach
             val hash = parts[0]
-            val branchName = parts[1]
-                .removePrefix("refs/remotes/origin/")
-                .removePrefix("refs/heads/")
-            if (TICKET_KEY_RE.matches(branchName) && branchName != excludeBranch) {
-                tipMap[hash] = branchName
+            val refname = parts[1]
+            val branchName = when {
+                refname.startsWith("refs/heads/") -> refname.removePrefix("refs/heads/")
+                refname.startsWith("refs/remotes/") ->
+                    refname.removePrefix("refs/remotes/").substringAfter('/', "")
+
+                else -> ""
+            }
+            if (branchName.isNotBlank() && branchName != excludeBranch) {
+                tipMap.getOrPut(hash) { mutableListOf() }.add(branchName)
             }
         }
         return tipMap
+    }
+
+    /** True if `gh` reports an open PR whose head is [branchName]. */
+    private fun hasOpenPr(workDir: File, branchName: String): Boolean {
+        val prResult = PrService.runCmd(
+            listOf(
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branchName,
+                "--json",
+                "number",
+                "--jq",
+                ".[0].number"
+            ),
+            workDir
+        )
+        val num = prResult.stdout.trim()
+        return prResult.exitCode == 0 && num.isNotBlank() && num != "null"
     }
 
     /**
@@ -184,7 +209,11 @@ object CreatePrService {
         currentBranch: String,
         logRef: String = "HEAD"
     ): String? {
-        val tipMap = buildTicketBranchTipMap(workDir, currentBranch)
+        val tipMap = buildBranchTipMap(workDir, currentBranch)
+            .mapNotNull { (hash, names) ->
+                names.firstOrNull { TICKET_KEY_RE.matches(it) }?.let { hash to it }
+            }
+            .toMap()
         if (tipMap.isEmpty()) return null
 
         val logResult =
@@ -213,43 +242,27 @@ object CreatePrService {
     }
 
     /**
-     * Scans this branch's own commit messages — walking `--first-parent` from HEAD so a merge of
-     * the base branch back into this one doesn't drag in unrelated history — for Jira ticket
-     * links, one per line (matching the commit-message convention of a bare `.../browse/KEY` line
-     * per referenced ticket). Stops at whichever boundary comes first: the tip of another ticket
-     * branch this one is stacked on, or the merge-base with [baseBranch]. Returns the distinct
-     * keys found other than [ticketKey] itself, oldest commit first, so a PR that folds in work
-     * from another ticket gets a title like "CW-100, CW-101: summary" instead of just "CW-100".
+     * Scans this branch's own commit messages — walking `--first-parent` from HEAD — for Jira
+     * ticket links, one per line (matching the commit-message convention of a bare
+     * `.../browse/KEY` line per referenced ticket). Checked one commit at a time:
+     *
+     *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? Check whether it has an
+     *    open PR. If it does, that's a real stacking boundary — stop there. If it doesn't (a
+     *    stale/never-opened branch ref), its commits are effectively folded into *this* PR, so
+     *    keep walking past it and repeat the same check at the next branch tip encountered.
+     *  - Hits the tip of any other branch (e.g. "dev-wf-s9", a base/integration branch) — stop
+     *    immediately, no PR check needed.
+     *
+     * Returns the distinct keys found other than [ticketKey] itself, oldest commit first, so a PR
+     * that folds in work from another ticket gets a title like "CW-100, CW-101: summary" instead
+     * of just "CW-100".
      */
     private fun collectExtraTicketKeys(
         workDir: File,
         branch: String,
-        ticketKey: String,
-        baseBranch: String?
+        ticketKey: String
     ): List<String> {
-        val tipMap = buildTicketBranchTipMap(workDir, branch)
-
-        val mergeBaseHash = baseBranch?.takeIf { it.isNotBlank() }?.let { base ->
-            val local = PrService.runCmd(listOf("git", "merge-base", "HEAD", base), workDir)
-            if (local.exitCode == 0 && local.stdout.isNotBlank()) local.stdout.trim()
-            else {
-                // Base branches aren't necessarily on "origin" — e.g. a base branch like
-                // "dev-wf-s9" lives on "upstream" per the same remote convention PrService uses
-                // elsewhere (ticket-shaped branch names → origin, everything else → upstream).
-                // Falling back to a hardcoded "origin/$base" here meant the merge-base lookup
-                // silently failed for such base branches, leaving this walk with no boundary
-                // there — so it kept walking back through the base branch's own history,
-                // collecting unrelated ticket keys, until it happened to hit another ticket
-                // branch's tip.
-                val remoteName = PrService.getRemote(base)
-                val remote =
-                    PrService.runCmd(
-                        listOf("git", "merge-base", "HEAD", "$remoteName/$base"),
-                        workDir
-                    )
-                if (remote.exitCode == 0 && remote.stdout.isNotBlank()) remote.stdout.trim() else null
-            }
-        }
+        val tipMap = buildBranchTipMap(workDir, branch)
 
         val logResult =
             PrService.runCmd(
@@ -258,11 +271,22 @@ object CreatePrService {
             )
         if (logResult.exitCode != 0) return emptyList()
 
-        // Walk newest -> oldest, stopping at whichever boundary is nearer to HEAD.
+        val prCheckCache = mutableMapOf<String, Boolean>()
+
+        // Walk newest -> oldest, stopping at whichever branch tip qualifies as a boundary first.
         val ownHashes = mutableListOf<String>()
-        for (hash in logResult.stdout.lines().filter { it.isNotBlank() }) {
-            if (hash == mergeBaseHash) break
-            if (tipMap.containsKey(hash)) break
+        outer@ for (hash in logResult.stdout.lines().filter { it.isNotBlank() }) {
+            val namesHere = tipMap[hash]
+            if (namesHere != null) {
+                for (name in namesHere) {
+                    val isTicketShaped = TICKET_KEY_RE.matches(name)
+                    if (!isTicketShaped) break@outer // base/integration branch — stop, no check.
+                    val hasPr = prCheckCache.getOrPut(name) { hasOpenPr(workDir, name) }
+                    if (hasPr) break@outer // stacked on a real, already-open PR — stop here.
+                    // No PR yet: this ticket branch's tip doesn't count as a boundary; fall
+                    // through and keep walking past it toward the next branch tip.
+                }
+            }
             ownHashes += hash
         }
         if (ownHashes.isEmpty()) return emptyList()
