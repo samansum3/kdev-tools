@@ -35,7 +35,7 @@ data class CreatePrOutcome(
  */
 object CreatePrService {
 
-    private val TICKET_KEY_RE = Regex("^[A-Z]+-[0-9]+(-[0-9]+)?$")
+    internal val TICKET_KEY_RE = Regex("^[A-Z]+-[0-9]+(-[0-9]+)?$")
     private val CANONICAL_KEY_RE = Regex("^[A-Z]+-[0-9]+$")
     private val TRAILING_NUMBER_SUFFIX_RE = Regex("-[0-9]*$")
     private val IMAGE_URL_RE = Regex("""\((https://github\.com/user-attachments/assets/[^)]+)\)""")
