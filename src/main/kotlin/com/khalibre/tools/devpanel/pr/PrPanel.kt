@@ -826,14 +826,14 @@ class PrPanel(
     ): JLabel {
         val resolvedBg = bg ?: when (state) {
             ReviewState.APPROVED -> Color(234, 243, 222)
-            ReviewState.CHANGES_REQUESTED -> Color(250, 238, 218)
+            ReviewState.CHANGES_REQUESTED -> Color(96, 67, 67)
             ReviewState.COMMENTED -> Color(235, 235, 250)
             ReviewState.AWAITING -> Color(230, 241, 251)
             null -> Color(252, 235, 235)
         }
         val resolvedFg = fg ?: when (state) {
             ReviewState.APPROVED -> Color(59, 109, 17)
-            ReviewState.CHANGES_REQUESTED -> Color(133, 79, 11)
+            ReviewState.CHANGES_REQUESTED -> Color(230, 150, 150)
             ReviewState.COMMENTED -> Color(88, 60, 163)
             ReviewState.AWAITING -> Color(24, 95, 165)
             null -> Color(163, 45, 45)
