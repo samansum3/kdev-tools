@@ -87,12 +87,13 @@ object CreatePrService {
         val clipboardImageMarkdown = tryUploadClipboardImage(workDir, cwDir)
 
         // ── Title & body ─────────────────────────────────────────────────
-        val titleKeys = (listOf(ticketKey) + extraTicketKeys).joinToString(", ")
+        val allTicketKeys = listOf(ticketKey) + extraTicketKeys
+        val titleKeys = allTicketKeys.joinToString(", ")
         val prTitle = "$titleKeys: $summary"
-        val jiraUrl = JiraService.ticketUrl(ticketKey, cwDir)
+        val jiraUrls = allTicketKeys.joinToString("\n") { JiraService.ticketUrl(it, cwDir) }
         val prBody = buildString {
             if (parentPrRef != null) append("### DEPEND ON $parentPrRef\n")
-            append(jiraUrl)
+            append(jiraUrls)
             if (clipboardImageMarkdown != null) append("\n").append(clipboardImageMarkdown)
         }
 
