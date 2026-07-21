@@ -134,6 +134,37 @@ object JiraUserService {
         }
     }
 
+    fun selfCacheFile(cwDir: File) = File(cwDir, "jira-me.json")
+
+    /** Returns the logged-in Jira user's own accountId, via /rest/api/3/myself. Cached permanently
+     *  once fetched, same convention as [loadUsers] — this identity doesn't change per project. */
+    fun currentAccountId(cwDir: File): String? {
+        val cache = selfCacheFile(cwDir)
+        if (cache.exists()) {
+            try {
+                val obj = JsonParser.parseString(cache.readText()).asJsonObject
+                return obj.get("accountId")?.asString
+            } catch (_: Exception) {
+            }
+        }
+        return try {
+            val cfg = DevConfig.load(cwDir)
+            val baseUrl = cfg.jira.base_url.trimEnd('/')
+            if (baseUrl.isBlank()) return null
+            val conn = openJiraConn(cwDir, "$baseUrl/rest/api/3/myself")
+            if (conn.responseCode != 200) return null
+            val body = conn.inputStream.bufferedReader().readText()
+            val accountId = JsonParser.parseString(body).asJsonObject.get("accountId")?.asString
+            if (accountId != null) {
+                cwDir.mkdirs()
+                cache.writeText(body)
+            }
+            accountId
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun jsonEscape(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     private fun openJiraConn(cwDir: File, url: String): HttpURLConnection {

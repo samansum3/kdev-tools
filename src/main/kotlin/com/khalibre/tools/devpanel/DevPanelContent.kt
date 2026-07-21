@@ -7,6 +7,7 @@ import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.config.ConfigPanel
 import com.khalibre.tools.devpanel.pr.PrTabsPanel
 import com.khalibre.tools.devpanel.tickets.TicketTabsPanel
+import com.khalibre.tools.devpanel.timelog.TimeLogPanel
 import java.awt.BorderLayout
 import java.io.File
 import javax.swing.JPanel
@@ -16,12 +17,14 @@ class DevPanelContent(private val project: Project) : JPanel(BorderLayout()) {
 
     private val prTabsPanel = PrTabsPanel(project)
     private val ticketTabsPanel = TicketTabsPanel(project)
+    private val timeLogPanel = TimeLogPanel(project)
     private val configPanel =
         ConfigPanel(project).also { it.setTicketsPanel { ticketTabsPanel.activeTicketsPanel() } }
 
     private val tabs = JBTabbedPane().apply {
         addTab("PR Tools", prTabsPanel)
         addTab("Tickets", ticketTabsPanel)
+        addTab("Time Log", timeLogPanel)
         addTab("Config", configPanel)
     }
 
@@ -39,7 +42,8 @@ class DevPanelContent(private val project: Project) : JPanel(BorderLayout()) {
         when (tabs.selectedIndex) {
             0 -> prTabsPanel.refreshActive()
             1 -> ticketTabsPanel.refreshActive()
-            2 -> configPanel.loadConfig()
+            2 -> timeLogPanel.reload()
+            3 -> configPanel.loadConfig()
         }
     }
 

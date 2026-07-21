@@ -139,9 +139,11 @@ object PrService {
                 )
             )
 
-        val targetRemote = getRemote(target)
-        val pushResult = pushBranch(workDir, targetRemote, target)
-        if (pushResult.isFailure) return pushResult;
+        // Push in background
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val targetRemote = getRemote(target)
+            pushBranch(workDir, targetRemote, target)
+        }
 
         // `git rebase <upstream> <branch>` implicitly checks out <branch> as a side effect
         // (per git's own docs). When the caller started on a different branch, switch back so

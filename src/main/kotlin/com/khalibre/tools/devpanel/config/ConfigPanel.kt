@@ -25,6 +25,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val jiraUrlField = JBTextField()
     private val projectKeyField = JBTextField()
+    private val timeProjectKeyField = JBTextField()
     private val emailField = JBTextField()
     private val apiTokenField = JBPasswordField()
     private val telegramChatIdField = JBTextField()
@@ -157,12 +158,28 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
             })
         }
 
+        // Three-way row variant (used for Base URL / Project key / Time project key)
+        fun cell3(row: Int, col: Int, comp: JComponent) {
+            val (left, right) = when (col) {
+                0 -> 0 to 4
+                1 -> 4 to 4
+                else -> 4 to 0
+            }
+            form.add(comp, GridBagConstraints().apply {
+                gridx = col; gridy = row; gridwidth = 1
+                fill = GridBagConstraints.HORIZONTAL; weightx = 1.0 / 3
+                insets = JBUI.insets(0, left, 0, right)
+            })
+        }
+
         // JIRA
         fullRow(0, sectionLabel("JIRA"))
-        leftCell(1, fieldLabel("Base URL"))
-        rightCell(1, fieldLabel("Project key"))
-        leftCell(2, jiraUrlField)
-        rightCell(2, projectKeyField)
+        cell3(1, 0, fieldLabel("Base URL"))
+        cell3(1, 1, fieldLabel("Project key"))
+        cell3(1, 2, fieldLabel("Time project key"))
+        cell3(2, 0, jiraUrlField)
+        cell3(2, 1, projectKeyField)
+        cell3(2, 2, timeProjectKeyField)
         leftCell(3, fieldLabel("Email"))
         rightCell(3, fieldLabel("API token"))
         leftCell(4, emailField)
@@ -210,6 +227,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         val cfg = DevConfig.load(cwDir())
         jiraUrlField.text = cfg.jira.base_url
         projectKeyField.text = cfg.jira.project_key
+        timeProjectKeyField.text = cfg.jira.time_project_key
         emailField.text = cfg.jira.email
         apiTokenField.text = cfg.jira.api_token
         statusLabel.text = ""
@@ -227,6 +245,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
             jira = JiraConfig(
                 base_url = jiraUrlField.text.trim().trimEnd('/'),
                 project_key = projectKeyField.text.trim().uppercase(),
+                time_project_key = timeProjectKeyField.text.trim().uppercase(),
                 email = emailField.text.trim(),
                 api_token = String(apiTokenField.password)
             ),
