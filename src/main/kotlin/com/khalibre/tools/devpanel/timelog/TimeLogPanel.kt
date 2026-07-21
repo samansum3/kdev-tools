@@ -1,7 +1,9 @@
 package com.khalibre.tools.devpanel.timelog
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
@@ -12,8 +14,9 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
-import java.util.Locale
+import java.util.*
 import javax.swing.*
+import javax.swing.Timer
 import javax.swing.border.CompoundBorder
 
 class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
@@ -31,11 +34,63 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
     }
 
+    // Reload icon — same styling/spin pattern as TicketTabsPanel's reloadButton. Spins both on
+    // manual click and while a week switch (prev/next) is loading.
+    private val reloadButton = JButton(AllIcons.Actions.Refresh).apply {
+        toolTipText = "Reload"
+        isFocusPainted = false; isBorderPainted = false; isContentAreaFilled = false
+        preferredSize = Dimension(22, 22); minimumSize = Dimension(22, 22)
+        maximumSize = Dimension(22, 22)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        addActionListener { reload() }
+    }
+    private var reloadSpinTimer: Timer? = null
+    private val reloadSpinIcons = listOf(
+        AllIcons.Actions.Refresh,
+        AllIcons.Process.Step_1,
+        AllIcons.Process.Step_2,
+        AllIcons.Process.Step_3,
+        AllIcons.Process.Step_4
+    )
+
+    private fun setReloadSpinning(spinning: Boolean) {
+        reloadSpinTimer?.stop(); reloadSpinTimer = null
+        if (spinning) {
+            var frame = 0
+            reloadSpinTimer = Timer(120) {
+                reloadButton.icon = reloadSpinIcons[frame++ % reloadSpinIcons.size]
+            }.also { it.start() }
+            reloadButton.isEnabled = false
+        } else {
+            reloadButton.icon = AllIcons.Actions.Refresh; reloadButton.isEnabled = true
+        }
+    }
+
+    private fun iconNavButton(icon: javax.swing.Icon, tooltip: String, action: () -> Unit) =
+        JButton(icon).apply {
+            toolTipText = tooltip
+            isFocusPainted = false; isBorderPainted = false; isContentAreaFilled = false
+            preferredSize = Dimension(22, 22); minimumSize = Dimension(22, 22)
+            maximumSize = Dimension(22, 22)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addActionListener { action() }
+        }
+
     private val daysGrid = JPanel(GridLayout(1, 5, 8, 0))
+    private val separator = JPanel().apply {
+        isOpaque = true
+        background = JBColor(Color(218, 218, 218), Color(60, 63, 65))
+        maximumSize = Dimension(Int.MAX_VALUE, 1)
+        preferredSize = Dimension(preferredSize.width, 1)
+    }
 
     init {
-        border = JBUI.Borders.empty(10, 12)
-        add(buildHeader(), BorderLayout.NORTH)
+        val heading = JPanel(BorderLayout()).apply {
+            add(buildHeader(), BorderLayout.NORTH)
+            add(Box.createVerticalStrut(JBUI.scale(4)), BorderLayout.CENTER)
+            add(separator, BorderLayout.SOUTH)
+        }
+        add(heading, BorderLayout.NORTH)
 
         val scroll = JBScrollPane(daysGrid).apply {
             border = JBUI.Borders.emptyTop(10)
@@ -48,28 +103,36 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         reload()
     }
 
-    // ── Header: ◀  date range  ▶ ──────────────────────────────────────────────
+    // ── Header: [◀ date range ▶] (tightly grouped)  ...  [reload icon] ─────────
 
     private fun buildHeader(): JComponent {
-        val prevBtn = JButton("◀").apply {
-            toolTipText = "Previous week"
-            addActionListener { weekStart = weekStart.minusWeeks(1); reload() }
+        val prevBtn = iconNavButton(AllIcons.Actions.Back, "Previous week") {
+            weekStart = weekStart.minusWeeks(1); reload()
         }
-        val nextBtn = JButton("▶").apply {
-            toolTipText = "Next week"
-            addActionListener { weekStart = weekStart.plusWeeks(1); reload() }
+        val nextBtn = iconNavButton(AllIcons.Actions.Forward, "Next week") {
+            weekStart = weekStart.plusWeeks(1); reload()
+        }
+        val navGroup = JPanel(FlowLayout(FlowLayout.CENTER, JBUI.scale(12), 0)).apply {
+            isOpaque = false
+            add(prevBtn)
+            add(rangeLabel)
+            add(nextBtn)
+        }
+        val reloadWrap = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+            isOpaque = false
+            add(reloadButton)
         }
         return JPanel(BorderLayout()).apply {
-            add(prevBtn, BorderLayout.WEST)
-            add(rangeLabel, BorderLayout.CENTER)
-            add(nextBtn, BorderLayout.EAST)
+            add(navGroup, BorderLayout.CENTER)
+            add(reloadWrap, BorderLayout.EAST)
         }
     }
 
     private fun updateRangeLabel() {
         val weekEnd = weekStart.plusDays(4)
         val fmt = DateTimeFormatter.ofPattern("MMM d")
-        rangeLabel.text = "${weekStart.format(fmt)} – ${weekEnd.format(DateTimeFormatter.ofPattern("d, yyyy"))}"
+        rangeLabel.text =
+            "${weekStart.format(fmt)} – ${weekEnd.format(DateTimeFormatter.ofPattern("d, yyyy"))}"
     }
 
     // ── Reload ───────────────────────────────────────────────────────────────
@@ -85,10 +148,12 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
 
         statusLabel.text = "Loading…"
+        setReloadSpinning(true)
         val weekEnd = weekStart.plusDays(4)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = TimeLogService.fetchWeekWorklogs(weekStart, weekEnd, dir)
             SwingUtilities.invokeLater {
+                setReloadSpinning(false)
                 result.onSuccess { entries ->
                     statusLabel.text = ""
                     renderGrid(entries)
@@ -172,7 +237,8 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun buildEntryCard(entry: WorklogEntry): JComponent {
         val card = object : JPanel() {
-            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+            override fun getMaximumSize(): Dimension =
+                Dimension(Int.MAX_VALUE, preferredSize.height)
         }.apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
@@ -184,12 +250,13 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
             )
         }
         val top = object : JPanel(BorderLayout()) {
-            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+            override fun getMaximumSize(): Dimension =
+                Dimension(Int.MAX_VALUE, preferredSize.height)
         }.apply {
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
             add(JBLabel(entry.issueKey).apply {
-                font = font.deriveFont(Font.BOLD, font.size - 1f)
+                font = font.deriveFont(Font.BOLD, font.size - 2f)
             }, BorderLayout.WEST)
             add(JBLabel(entry.timeSpent).apply {
                 font = font.deriveFont(font.size - 2f)
@@ -207,7 +274,8 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         return card
     }
 
-    private fun escapeHtml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    private fun escapeHtml(s: String) =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun parseDurationToMinutes(timeSpent: String): Int {
         var minutes = 0
