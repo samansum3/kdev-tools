@@ -9,6 +9,11 @@ import com.intellij.ui.components.fields.ExtendableTextField
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JPanel
@@ -20,7 +25,9 @@ import javax.swing.event.DocumentListener
  * A button showing "<Key>: <summary>" for the currently-selected ticket. Clicking it opens a
  * popup with a full-width search field (with a clear-icon extension) at the top and a filtered
  * list of tickets below. Filtering happens purely client-side against the already-loaded
- * [items] — no API calls as the user types.
+ * [items] — no API calls as the user types. The list highlights whichever row the mouse is over
+ * (like a native combo box dropdown) independently of the actual committed selection, which only
+ * happens on click or Enter.
  */
 class IssuePickerButton : JButton("Select ticket…") {
 
@@ -28,8 +35,12 @@ class IssuePickerButton : JButton("Select ticket…") {
     private var selected: TimeTicketInfo? = null
     private var onSelected: ((TimeTicketInfo) -> Unit)? = null
 
+    private var initialSearchQuery: String = ""
+    private var onSearchChanged: ((String) -> Unit)? = null
+
     init {
         horizontalAlignment = javax.swing.SwingConstants.LEFT
+        margin = JBUI.insets(2, 6)
         addActionListener { showPopup() }
     }
 
@@ -40,6 +51,16 @@ class IssuePickerButton : JButton("Select ticket…") {
 
     fun setOnSelected(callback: (TimeTicketInfo) -> Unit) {
         onSelected = callback
+    }
+
+    /** Pre-fills the search field with [query] the next time the popup opens. */
+    fun setInitialSearchQuery(query: String) {
+        initialSearchQuery = query
+    }
+
+    /** Fired on every keystroke in the search field, so the caller can persist it. */
+    fun setOnSearchChanged(callback: (String) -> Unit) {
+        onSearchChanged = callback
     }
 
     fun selectedTicket(): TimeTicketInfo? = selected
@@ -55,33 +76,50 @@ class IssuePickerButton : JButton("Select ticket…") {
         val listModel = DefaultListModel<TimeTicketInfo>()
         items.forEach { listModel.addElement(it) }
 
-        lateinit var list: JBList<TimeTicketInfo>
-        list = JBList(listModel).apply {
-            cellRenderer = javax.swing.ListCellRenderer<TimeTicketInfo> { _, value, _, isSelected, _ ->
+        val list = JBList(listModel).apply {
+            cellRenderer = javax.swing.ListCellRenderer<TimeTicketInfo> { l, value, _, isSelected, _ ->
                 javax.swing.JLabel(label(value)).apply {
                     border = JBUI.Borders.empty(4, 8)
                     isOpaque = true
-                    background = if (isSelected) list.selectionBackground else list.background
-                    foreground = if (isSelected) list.selectionForeground else list.foreground
+                    background = if (isSelected) l.selectionBackground else l.background
+                    foreground = if (isSelected) l.selectionForeground else l.foreground
                 }
             }
         }
 
+        // Hover highlights the row under the mouse — same feel as a native combo box dropdown —
+        // entirely separate from committing a choice, which only happens on click or Enter.
+        list.addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val idx = list.locationToIndex(e.point)
+                if (idx >= 0) list.selectedIndex = idx
+            }
+        })
+
+        fun commit(ticket: TimeTicketInfo) {
+            setSelected(ticket)
+            onSelected?.invoke(ticket)
+        }
+
         val searchField = ExtendableTextField().apply {
             emptyText.text = "Search by key or summary…"
+            text = initialSearchQuery
         }
         val clearableExtension = ExtendableTextComponent.Extension.create(
             AllIcons.Actions.Close, AllIcons.Actions.CloseHovered, "Clear search"
         ) { searchField.text = "" }
 
         fun applyFilter() {
-            val query = searchField.text.trim().lowercase()
+            val query = searchField.text.trim()
+            onSearchChanged?.invoke(query)
+            val lower = query.lowercase()
             listModel.clear()
-            val filtered = if (query.isBlank()) items
+            val filtered = if (lower.isBlank()) items
             else items.filter {
-                it.key.lowercase().contains(query) || it.summary.lowercase().contains(query)
+                it.key.lowercase().contains(lower) || it.summary.lowercase().contains(lower)
             }
             filtered.forEach { listModel.addElement(it) }
+            if (filtered.isNotEmpty()) list.selectedIndex = 0
             if (searchField.extensions.contains(clearableExtension) != query.isNotEmpty()) {
                 if (query.isNotEmpty()) searchField.addExtension(clearableExtension)
                 else searchField.removeExtension(clearableExtension)
@@ -107,13 +145,46 @@ class IssuePickerButton : JButton("Select ticket…") {
             .setResizable(true)
             .createPopup()
 
-        list.addListSelectionListener { e ->
-            if (!e.valueIsAdjusting) {
-                val choice = list.selectedValue ?: return@addListSelectionListener
-                setSelected(choice)
-                onSelected?.invoke(choice)
+        list.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                val idx = list.locationToIndex(e.point)
+                val ticket = listModel.elementAt(idx) ?: return
+                commit(ticket)
                 popup.closeOk(null)
             }
+        })
+        searchField.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                when (e.keyCode) {
+                    KeyEvent.VK_DOWN -> {
+                        if (listModel.size() > 0) {
+                            list.selectedIndex = (list.selectedIndex + 1).coerceIn(0, listModel.size() - 1)
+                            e.consume()
+                        }
+                    }
+
+                    KeyEvent.VK_UP -> {
+                        if (listModel.size() > 0) {
+                            list.selectedIndex = (list.selectedIndex - 1).coerceIn(0, listModel.size() - 1)
+                            e.consume()
+                        }
+                    }
+
+                    KeyEvent.VK_ENTER -> {
+                        list.selectedValue?.let { commit(it) }
+                        popup.closeOk(null)
+                        e.consume()
+                    }
+                }
+            }
+        })
+
+        // Apply the remembered query's filter before showing, then move selection to whichever
+        // item (if any) matches the currently-selected ticket.
+        applyFilter()
+        selected?.let { current ->
+            val idx = (0 until listModel.size()).firstOrNull { listModel.elementAt(it).key == current.key }
+            if (idx != null) list.selectedIndex = idx
         }
 
         popup.showUnderneathOf(this)

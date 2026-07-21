@@ -31,6 +31,27 @@ object TimeLogService {
     private val gson = Gson()
     private val startedFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
 
+    fun searchQueryCacheFile(cwDir: File) = File(cwDir, "timelog-search-query.txt")
+
+    /** Last search keyword typed into the Time code picker, remembered across dialog opens. */
+    fun loadRememberedSearchQuery(cwDir: File?): String {
+        val file = cwDir?.let { searchQueryCacheFile(it) } ?: return ""
+        return if (file.exists()) try {
+            file.readText()
+        } catch (_: Exception) {
+            ""
+        } else ""
+    }
+
+    fun rememberSearchQuery(cwDir: File?, query: String) {
+        val dir = cwDir ?: return
+        try {
+            dir.mkdirs()
+            searchQueryCacheFile(dir).writeText(query)
+        } catch (_: Exception) {
+        }
+    }
+
     // ── Time-project ticket list (for the Add Time dialog's dropdown) ──────────
 
     fun timeTicketsCacheFile(cwDir: File) = File(cwDir, "time-tickets.json")

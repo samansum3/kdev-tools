@@ -12,9 +12,9 @@ import com.intellij.util.ui.JBUI
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.GridLayout
 import java.time.LocalDate
-import java.util.Calendar
-import java.util.Date
+import java.util.*
 import javax.swing.*
 
 /** Duration options offered in the Time combo: 15m increments up to 8h. */
@@ -61,18 +61,18 @@ class AddTimeDialog(
     }
 
     override fun createCenterPanel(): JComponent {
-        val panel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            preferredSize = Dimension(420, 300)
+        val topRow = JPanel(GridLayout(1, 3, 12, 0)).apply {
             add(labeled("Time code", issuePicker))
-            add(Box.createVerticalStrut(10))
             add(labeled("Time", timeCombo))
-            add(Box.createVerticalStrut(10))
             add(labeled("Date", dateSpinner))
+        }
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            preferredSize = Dimension(520, 260)
+            add(topRow)
             add(Box.createVerticalStrut(10))
             add(labeled("Description", JBScrollPane(descriptionArea)))
         }
-        return panel
     }
 
     private fun labeled(text: String, comp: JComponent): JComponent =
@@ -85,6 +85,8 @@ class AddTimeDialog(
         val dir = cwDir ?: return
         issuePicker.text = "Loading…"
         issuePicker.isEnabled = false
+        issuePicker.setInitialSearchQuery(TimeLogService.loadRememberedSearchQuery(dir))
+        issuePicker.setOnSearchChanged { query -> TimeLogService.rememberSearchQuery(dir, query) }
         ApplicationManager.getApplication().executeOnPooledThread {
             val tickets = TimeLogService.loadTimeTickets(dir)
             SwingUtilities.invokeLater {

@@ -5,6 +5,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.khalibre.tools.devpanel.common.CardUtils
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import java.awt.*
 import java.time.DayOfWeek
@@ -152,14 +153,10 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                     add(Box.createVerticalStrut(6))
                 }
             }
-        }
-
-        val addBtn = JButton("+ Add time").apply {
-            font = font.deriveFont(font.size - 1f)
-            alignmentX = Component.LEFT_ALIGNMENT
-            addActionListener {
+            add(CardUtils.makeActionButton("+ Add time") {
                 AddTimeDialog(project, date) { reload() }.show()
-            }
+            }.apply { alignmentX = Component.LEFT_ALIGNMENT })
+            add(Box.createVerticalGlue())
         }
 
         return JPanel(BorderLayout()).apply {
@@ -170,12 +167,14 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                 verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
                 horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
             }, BorderLayout.CENTER)
-            add(addBtn, BorderLayout.SOUTH)
         }
     }
 
     private fun buildEntryCard(entry: WorklogEntry): JComponent {
-        val card = JPanel(BorderLayout()).apply {
+        val card = object : JPanel() {
+            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }.apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
             border = CompoundBorder(
                 BorderFactory.createLineBorder(
@@ -184,8 +183,11 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                 JBUI.Borders.empty(6, 8)
             )
         }
-        val top = JPanel(BorderLayout()).apply {
+        val top = object : JPanel(BorderLayout()) {
+            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }.apply {
             isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
             add(JBLabel(entry.issueKey).apply {
                 font = font.deriveFont(Font.BOLD, font.size - 1f)
             }, BorderLayout.WEST)
@@ -198,9 +200,10 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         val summary = JBLabel("<html>${escapeHtml(summaryText)}</html>").apply {
             font = font.deriveFont(font.size - 2f)
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
+            alignmentX = Component.LEFT_ALIGNMENT
         }
-        card.add(top, BorderLayout.NORTH)
-        card.add(summary, BorderLayout.CENTER)
+        card.add(top)
+        card.add(summary)
         return card
     }
 
