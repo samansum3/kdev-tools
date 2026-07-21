@@ -7,13 +7,8 @@ import com.intellij.util.ui.JBUI
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.tickets.TicketsPanel
 import java.awt.*
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import java.io.File
-import javax.swing.JButton
-import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.Timer
+import javax.swing.*
 
 /**
  * Config tab — contains three sub-tabs:
@@ -111,96 +106,131 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun buildGeneralPanel(): JPanel {
         val outer = JPanel(BorderLayout())
-        outer.border = JBUI.Borders.empty(10, 12)
+        outer.border = JBUI.Borders.empty(12, 12)
 
         val form = JPanel(GridBagLayout())
-        form.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = requestFocusInWindow().let {}
-        })
+
+        fun addSection(row: Int, component: JComponent) {
+            form.add(component, GridBagConstraints().apply {
+                gridx = 0
+                gridy = row
+                weightx = 1.0
+                fill = GridBagConstraints.HORIZONTAL
+                anchor = GridBagConstraints.NORTHWEST
+                insets = JBUI.insetsBottom(12)
+            })
+        }
 
         fun sectionLabel(text: String) = JBLabel(text).apply {
             font = font.deriveFont(Font.BOLD, font.size - 1f)
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
-            border = JBUI.Borders.emptyTop(12)
         }
 
-        fun fieldLabel(text: String) = JBLabel(text).apply {
-            font = font.deriveFont(font.size - 1f)
-            border = JBUI.Borders.emptyTop(6)
+        fun inputBlock(label: String, field: JComponent): JPanel {
+            val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
+            p.add(
+                JBLabel(label).apply { font = font.deriveFont(font.size - 1f) },
+                BorderLayout.NORTH
+            )
+            p.add(field, BorderLayout.CENTER)
+            return p
         }
 
-        fun hint(text: String) = JBLabel(text).apply {
-            font = font.deriveFont(font.size - 2f)
-            foreground = JBUI.CurrentTheme.Label.disabledForeground()
-        }
-
-        fun fullRow(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 0; gridy = row; gridwidth = 3
-                fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
-                insets = JBUI.insets(0)
-            })
-        }
-
-        fun leftCell(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 0; gridy = row; gridwidth = 1
-                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
-                insets = JBUI.insets(0, 0, 0, 4)
-            })
-        }
-
-        fun rightCell(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 1; gridy = row; gridwidth = 1
-                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
-                insets = JBUI.insets(0, 4, 0, 0)
-            })
-        }
-
-        // Three-way row variant (used for Base URL / Project key / Time project key)
-        fun cell3(row: Int, col: Int, comp: JComponent) {
-            val (left, right) = when (col) {
-                0 -> 0 to 4
-                1 -> 4 to 4
-                else -> 4 to 0
+        fun twoColumnPanel(
+            leftLabel: String,
+            leftField: JComponent,
+            rightLabel: String,
+            rightField: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 2, JBUI.scale(4), 0)).apply {
+                add(inputBlock(leftLabel, leftField))
+                add(inputBlock(rightLabel, rightField))
             }
-            form.add(comp, GridBagConstraints().apply {
-                gridx = col; gridy = row; gridwidth = 1
-                fill = GridBagConstraints.HORIZONTAL; weightx = 1.0 / 3
-                insets = JBUI.insets(0, left, 0, right)
-            })
         }
 
-        // JIRA
-        fullRow(0, sectionLabel("JIRA"))
-        cell3(1, 0, fieldLabel("Base URL"))
-        cell3(1, 1, fieldLabel("Project key"))
-        cell3(1, 2, fieldLabel("Time project key"))
-        cell3(2, 0, jiraUrlField)
-        cell3(2, 1, projectKeyField)
-        cell3(2, 2, timeProjectKeyField)
-        leftCell(3, fieldLabel("Email"))
-        rightCell(3, fieldLabel("API token"))
-        leftCell(4, emailField)
-        rightCell(4, apiTokenField)
+        fun threeColumnPanel(
+            l1: String,
+            c1: JComponent,
+            l2: String,
+            c2: JComponent,
+            l3: String,
+            c3: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 3, JBUI.scale(4), 0)).apply {
+                add(inputBlock(l1, c1))
+                add(inputBlock(l2, c2))
+                add(inputBlock(l3, c3))
+            }
+        }
 
-        // TELEGRAM
-        fullRow(5, sectionLabel("TELEGRAM"))
-        leftCell(6, fieldLabel("Chat id"))
-        rightCell(6, fieldLabel("Bot token"))
-        leftCell(7, telegramChatIdField)
-        rightCell(7, telegramBotTokenField)
+        fun oneColumnPanel(
+            label: String,
+            field: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 1, 0, 0)).apply {
+                add(inputBlock(label, field))
+            }
+        }
 
-        // CALENDARIFIC
-        fullRow(8, sectionLabel("CALENDARIFIC"))
-        fullRow(9, fieldLabel("API key"))
-        fullRow(10, calendarificApiKeyField)
+        val jiraSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("JIRA"), BorderLayout.NORTH)
 
-        // Spacer
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+                    add(
+                        threeColumnPanel(
+                            "Base URL", jiraUrlField,
+                            "Project key", projectKeyField,
+                            "Time project key", timeProjectKeyField
+                        )
+                    )
+
+                    add(Box.createVerticalStrut(JBUI.scale(8)))
+
+                    add(
+                        twoColumnPanel(
+                            "Email", emailField,
+                            "API token", apiTokenField
+                        )
+                    )
+                },
+                BorderLayout.CENTER
+            )
+        }
+
+        val telegramSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("TELEGRAM"), BorderLayout.NORTH)
+            add(
+                twoColumnPanel(
+                    "Chat id", telegramChatIdField,
+                    "Bot token", telegramBotTokenField
+                ),
+                BorderLayout.CENTER
+            )
+        }
+
+        val calendarificSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("CALENDARIFIC"), BorderLayout.NORTH)
+            add(
+                oneColumnPanel(
+                    "API key",
+                    calendarificApiKeyField
+                ),
+                BorderLayout.CENTER
+            )
+        }
+
+        addSection(0, jiraSection)
+        addSection(1, telegramSection)
+        addSection(2, calendarificSection)
+
         form.add(JPanel(), GridBagConstraints().apply {
-            gridx = 0; gridy = 14; gridwidth = 3
-            weighty = 1.0; fill = GridBagConstraints.BOTH
+            gridx = 0
+            gridy = 99
+            weighty = 1.0
+            fill = GridBagConstraints.BOTH
         })
 
         val scroll = JBScrollPane(form).apply {
