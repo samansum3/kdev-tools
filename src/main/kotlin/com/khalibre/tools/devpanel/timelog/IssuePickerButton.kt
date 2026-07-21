@@ -38,15 +38,44 @@ class IssuePickerButton : JButton("Select ticket…") {
     private var initialSearchQuery: String = ""
     private var onSearchChanged: ((String) -> Unit)? = null
 
+    private val maxWidth = JBUI.scale(220)
+
     init {
         horizontalAlignment = javax.swing.SwingConstants.LEFT
         margin = JBUI.insets(2, 6)
         addActionListener { showPopup() }
+        applyLabel("Select ticket…")
+    }
+
+    /** Keeps the button's width capped regardless of how long the selected ticket's text is —
+     *  without this, a long "<Key>: <summary>" would grow this button (and therefore the whole
+     *  Add Time dialog, since it sits in a GridLayout row) every time a different ticket is picked. */
+    override fun getPreferredSize(): Dimension {
+        val base = super.getPreferredSize()
+        return Dimension(minOf(base.width, maxWidth), base.height)
+    }
+
+    override fun getMaximumSize(): Dimension = preferredSize
+
+    /** Sets [full] as the tooltip and displays it truncated with an ellipsis if it doesn't fit
+     *  within [maxWidth]. */
+    private fun applyLabel(full: String) {
+        toolTipText = full
+        val fm = getFontMetrics(font)
+        val available = maxWidth - insets.left - insets.right - JBUI.scale(4)
+        text = if (fm == null || fm.stringWidth(full) <= available) full
+        else {
+            var truncated = full
+            while (truncated.isNotEmpty() && fm.stringWidth("$truncated…") > available) {
+                truncated = truncated.dropLast(1)
+            }
+            "$truncated…"
+        }
     }
 
     fun setItems(newItems: List<TimeTicketInfo>) {
         items = newItems
-        text = selected?.let { label(it) } ?: "Select ticket…"
+        applyLabel(selected?.let { label(it) } ?: "Select ticket…")
     }
 
     fun setOnSelected(callback: (TimeTicketInfo) -> Unit) {
@@ -67,7 +96,7 @@ class IssuePickerButton : JButton("Select ticket…") {
 
     fun setSelected(ticket: TimeTicketInfo?) {
         selected = ticket
-        text = ticket?.let { label(it) } ?: "Select ticket…"
+        applyLabel(ticket?.let { label(it) } ?: "Select ticket…")
     }
 
     private fun label(t: TimeTicketInfo) = "${t.key}: ${t.summary}"
@@ -111,6 +140,7 @@ class IssuePickerButton : JButton("Select ticket…") {
 
         fun applyFilter() {
             val query = searchField.text.trim()
+            initialSearchQuery = query
             onSearchChanged?.invoke(query)
             val lower = query.lowercase()
             listModel.clear()
