@@ -12,6 +12,8 @@ import com.khalibre.tools.devpanel.common.CardUtils
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.tickets.JiraUserService
 import java.awt.*
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -39,41 +41,16 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
     }
 
-    private val userCombo: ComboBox<JiraUserService.JiraUser> =
-        ComboBox<JiraUserService.JiraUser>().also { combo ->
-            combo.renderer = object : DefaultListCellRenderer() {
-                override fun getListCellRendererComponent(
-                    list: JList<*>,
-                    value: Any?,
-                    index: Int,
-                    isSelected: Boolean,
-                    cellHasFocus: Boolean
-                ): Component {
-                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                    val user = value as? JiraUserService.JiraUser
-                    text = user?.displayName ?: ""
-                    icon = user?.let { u ->
-                        JiraUserService.resolveAvatarIcon(
-                            u,
-                            cwDir
-                        ) { combo.repaint() }
-                    }
-                    iconTextGap = 6
-                    border = JBUI.Borders.empty(2, 4)
-                    return this
-                }
-            }
-            combo.preferredSize = Dimension(JBUI.scale(170), combo.preferredSize.height)
-            combo.addActionListener {
-                val user =
-                    combo.selectedItem as? JiraUserService.JiraUser ?: return@addActionListener
-                if (user.accountId == selectedAccountId) return@addActionListener
-                selectedAccountId = user.accountId
-                displayedWeek = null
-                currentEntries = null
-                reload()
-            }
+    private val userCombo: JComboBox<JiraUserService.JiraUser?> = buildUserCombo().apply {
+        addActionListener {
+            val user = selectedItem as? JiraUserService.JiraUser ?: return@addActionListener
+            if (user.accountId == selectedAccountId) return@addActionListener
+            selectedAccountId = user.accountId
+            displayedWeek = null
+            currentEntries = null
+            reload()
         }
+    }
 
     // Reload icon — same styling/spin pattern as TicketTabsPanel's reloadButton. Spins both on
     // manual click and while a week switch (prev/next) is loading.
@@ -148,6 +125,136 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         initUserAndLoad()
     }
+
+    private fun buildUserCombo(): JComboBox<JiraUserService.JiraUser?> {
+        val hoverBg = JBUI.CurrentTheme.ActionButton.hoverBackground()
+
+        val combo = object : ComboBox<JiraUserService.JiraUser?>() {
+            var isHovered = false
+
+            override fun getInsets(): Insets {
+                val hasAvatar = selectedItem is JiraUserService.JiraUser
+                return if (hasAvatar) Insets(0, 0, 0, 6) else Insets(1, 4, 1, 4)
+            }
+
+            override fun getInsets(insets: Insets): Insets {
+                val i = getInsets()
+                insets.set(i.top, i.left, i.bottom, i.right)
+                return insets
+            }
+
+            override fun getPreferredSize(): Dimension {
+                @Suppress("UNCHECKED_CAST")
+                val r = renderer as? ListCellRenderer<Any?> ?: return super.getPreferredSize()
+                val rendererComp =
+                    r.getListCellRendererComponent(JList<Any?>(), selectedItem, -1, false, false)
+                val content = rendererComp.preferredSize
+                val i = getInsets()
+                return Dimension(
+                    content.width + i.left + i.right,
+                    content.height + i.top + i.bottom
+                )
+            }
+
+            override fun doLayout() {
+                super.doLayout()
+                // Zero out the arrow button AFTER the UI delegate's layout manager runs,
+                // so its stale bounds never shrink the renderer's display area.
+                for (comp in components) {
+                    if (comp is JButton) {
+                        comp.bounds = Rectangle(0, 0, 0, 0)
+                    }
+                }
+            }
+
+            override fun paintComponent(g: Graphics) {
+                if (isHovered) {
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(
+                        RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON
+                    )
+                    g2.color = hoverBg
+                    val w = width.toDouble()
+                    val h = height.toDouble()
+                    val r = JBUI.scale(4).toDouble()
+                    g2.fill(java.awt.geom.RoundRectangle2D.Double(0.0, 0.0, w, h, r, r))
+                    g2.dispose()
+                }
+                super.paintComponent(g)
+            }
+        }
+        combo.isEditable = false
+        combo.isOpaque = false
+        combo.background =
+            Color(0, 0, 0, 0) // always transparent — UI delegate's own fill is a no-op now
+        combo.border = JBUI.Borders.empty()
+        combo.font = combo.font.deriveFont(combo.font.size - 2f)
+        combo.putClientProperty("JComboBox.isBorderless", true)
+        combo.putClientProperty("JComboBox.isTableCellEditor", false)
+
+        for (comp in combo.components) {
+            if (comp is JButton) {
+                comp.isVisible = false
+            }
+        }
+        combo.addMouseListener(object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                combo.isHovered = true; combo.repaint()
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                combo.isHovered = false; combo.repaint()
+            }
+        })
+
+        fun rerenderComboToContent() {
+            combo.invalidate()   // mark this component's cached size as stale
+            combo.revalidate()   // walk up to the nearest validate root and schedule layout
+            combo.repaint()
+        }
+
+        combo.renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean
+            ): Component {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                isOpaque = index != -1 && isSelected
+                border = JBUI.Borders.empty(1, 0)
+                val user = value as? JiraUserService.JiraUser
+                val caret = if (index == -1) "  ▾" else ""
+                if (user == null) {
+                    text = "Unassigned$caret"
+                    icon = null
+                    foreground =
+                        if (isSelected) foreground else JBUI.CurrentTheme.Label.disabledForeground()
+                    return this
+                }
+                text = "${user.displayName}$caret"
+                foreground = if (isSelected) foreground
+                else if (user.accountId == myAccountId)
+                    Color(59, 109, 17) else JBUI.CurrentTheme.Label.disabledForeground()
+                icon = resolveAssigneeAvatar(user, ::rerenderComboToContent)
+                iconTextGap = 4
+                return this
+            }
+        }
+
+        combo.addActionListener {
+            rerenderComboToContent()
+        }
+        return combo
+    }
+
+    private fun resolveAssigneeAvatar(
+        user: JiraUserService.JiraUser,
+        onLoaded: () -> Unit
+    ): ImageIcon? =
+        JiraUserService.resolveAvatarIcon(user, cwDir, onLoaded)
 
     // ── Header: [user combo]  [◀ date range ▶] (tightly grouped)  ...  [reload icon] ─────────
 
