@@ -11,7 +11,10 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
 
-class JiraUserComboService(private val project: Project) {
+class JiraUserComboService(
+    private val project: Project,
+    private val onLoaded: (() -> Unit)? = null
+) {
 
     private val cwDir get() = ProjectPaths.cwDir(project)
     private var currentUserAccountId: String? = null
@@ -24,21 +27,44 @@ class JiraUserComboService(private val project: Project) {
             SwingUtilities.invokeLater {
                 currentUserAccountId = accountId
                 jiraUsers = users
+                onLoaded?.invoke()
             }
         }
     }
 
     fun createJiraUserCombo(): JComboBox<JiraUser?> {
         val combo = buildJiraUserCombo()
-        ApplicationManager.getApplication().executeOnPooledThread {
-            SwingUtilities.invokeLater {
-                val (curFirst, rest) = jiraUsers.partition { it.accountId == currentUserAccountId }
-                val ordered = curFirst + rest
-                val model = DefaultComboBoxModel<JiraUser>()
-                ordered.forEach { model.addElement(it) }
-                combo.model = model
+        val (curFirst, rest) = jiraUsers.partition { it.accountId == currentUserAccountId }
+        val ordered = curFirst + rest
+        val model = DefaultComboBoxModel<JiraUser>()
+        ordered.forEach { model.addElement(it) }
+        combo.model = model
+        return combo
+    }
+
+    fun buildAssigneeCombo(ticket: JiraTicket): JComboBox<JiraUser?> {
+        val combo = buildJiraUserCombo()
+        val (curFirst, rest) = jiraUsers.partition { it.accountId == currentUserAccountId }
+        val ordered = curFirst + rest
+        val model = DefaultComboBoxModel<JiraUser>()
+        model.addElement(null) // Add Unassigned item
+        ordered.forEach { model.addElement(it) }
+
+        val ticketAssignee =
+            jiraUsers.firstOrNull { it.accountId == ticket.assigneeAccountId }
+        val selectedUser = ticketAssignee ?: ticket.assigneeAccountId?.let { accountId ->
+            JiraUser(
+                accountId,
+                ticket.assigneeName ?: accountId,
+                ticket.assigneeEmail,
+                null
+            ).also {
+                model.addElement(it)
             }
         }
+
+        combo.model = model
+        combo.selectedItem = selectedUser
         return combo
     }
 
