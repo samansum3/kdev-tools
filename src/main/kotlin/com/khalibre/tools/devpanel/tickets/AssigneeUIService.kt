@@ -5,8 +5,6 @@ import com.intellij.util.ui.JBUI
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
-import java.awt.image.BufferedImage
-import javax.imageio.ImageIO
 import javax.swing.*
 
 class AssigneeUIService(private val tkPanel: TicketsPanel) {
@@ -14,8 +12,6 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
     // Assignable users for the assignee dropdown (per-project), loaded once from cache/Jira.
     // "Unassigned" is represented as a null JiraUserService.JiraUser in the combo model.
     private var assignableUsers: List<JiraUserService.JiraUser> = emptyList()
-    private val assigneeAvatarCache = mutableMapOf<String, ImageIcon?>()  // accountId → avatar
-
 
     init {
         loadAssignableUsers()
@@ -240,64 +236,11 @@ class AssigneeUIService(private val tkPanel: TicketsPanel) {
         }
     }
 
-    /** Avatar loader for assignee combos: memory cache → disk cache (.git/cw/icons) → Jira fetch. */
-    private fun resolveAssigneeAvatar(user: JiraUserService.JiraUser): ImageIcon? {
-        assigneeAvatarCache[user.accountId]?.let { return it }
-        if (assigneeAvatarCache.containsKey(user.accountId)) return null // load already in flight / failed
-        assigneeAvatarCache[user.accountId] = null
-        val url = user.avatarUrl ?: return null
-        val cw = tkPanel.cwDir()
-        ApplicationManager.getApplication().executeOnPooledThread {
-            var icon: ImageIcon? = null
-            if (cw != null) {
-                val cacheFile = JiraUserService.userAvatarCacheFile(cw, user.accountId)
-                if (cacheFile.exists()) {
-                    try {
-                        ImageIO.read(cacheFile)?.let { icon = makeCircularIcon(it, 16) }
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-            if (icon == null) {
-                try {
-                    val raw = ImageIO.read(java.net.URL(url))
-                    if (raw != null) {
-                        icon = makeCircularIcon(raw, 16)
-                        if (cw != null) {
-                            try {
-                                val cacheFile =
-                                    JiraUserService.userAvatarCacheFile(cw, user.accountId)
-                                cacheFile.parentFile.mkdirs()
-                                ImageIO.write(raw, "png", cacheFile) // cache the raw square bitmap
-                            } catch (_: Exception) {
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                }
-            }
-            if (icon != null) {
-                assigneeAvatarCache[user.accountId] = icon
-                SwingUtilities.invokeLater { tkPanel.cardsPanel.revalidate(); tkPanel.cardsPanel.repaint() }
-            }
+    /** Avatar loader for assignee combos — delegates to the shared resolver in JiraUserService,
+     *  which both this combo and the Time Log user picker use. */
+    private fun resolveAssigneeAvatar(user: JiraUserService.JiraUser): ImageIcon? =
+        JiraUserService.resolveAvatarIcon(user, tkPanel.cwDir()) {
+            tkPanel.cardsPanel.revalidate()
+            tkPanel.cardsPanel.repaint()
         }
-        return null
-    }
-
-    /** Crops/scales a raw bitmap into a circular avatar icon, matching PrPanel's author avatar style. */
-    private fun makeCircularIcon(raw: BufferedImage, size: Int): ImageIcon {
-        val circle = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
-        val g = circle.createGraphics()
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.setRenderingHint(
-            RenderingHints.KEY_INTERPOLATION,
-            RenderingHints.VALUE_INTERPOLATION_BILINEAR
-        )
-        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-        g.fillOval(0, 0, size, size)
-        g.composite = AlphaComposite.SrcIn
-        g.drawImage(raw.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
-        g.dispose()
-        return ImageIcon(circle)
-    }
 }
