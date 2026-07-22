@@ -73,11 +73,13 @@ class AddTimeDialog(
     }
 
     override fun createCenterPanel(): JComponent {
-        val topRow = JPanel(GridBagLayout()).apply {
+        val topRow = object : JPanel(GridBagLayout()) {
+            override fun getMaximumSize(): Dimension =
+                Dimension(Int.MAX_VALUE, preferredSize.height)
+        }.apply {
             val gc = GridBagConstraints().apply {
                 fill = GridBagConstraints.HORIZONTAL
                 insets = Insets(0, 0, 0, 12)
-                weighty = 1.0
             }
 
             gc.gridx = 0
