@@ -95,6 +95,62 @@ object TimeLogService {
         }
     }
 
+    // ── Per-week worklog cache (instant display while a fresh fetch is in flight) ────────────
+
+    private data class CachedWorklogEntry(
+        val issueKey: String,
+        val issueSummary: String,
+        val date: String, // ISO-8601, e.g. "2026-07-20"
+        val timeSpent: String,
+        val comment: String
+    )
+
+    private fun weekCacheDir(cwDir: File) = File(cwDir, "time-log")
+
+    private fun weekCacheFile(cwDir: File, weekStart: LocalDate) =
+        File(weekCacheDir(cwDir), "$weekStart.json")
+
+    /** Cached worklogs for the week starting [weekStart], or null if nothing's cached yet. */
+    fun loadCachedWeek(cwDir: File?, weekStart: LocalDate): List<WorklogEntry>? {
+        val dir = cwDir ?: return null
+        val file = weekCacheFile(dir, weekStart)
+        if (!file.exists()) return null
+        return try {
+            val type =
+                object : com.google.gson.reflect.TypeToken<List<CachedWorklogEntry>>() {}.type
+            val cached: List<CachedWorklogEntry> = gson.fromJson(file.readText(), type)
+            cached.map {
+                WorklogEntry(
+                    it.issueKey,
+                    it.issueSummary,
+                    LocalDate.parse(it.date),
+                    it.timeSpent,
+                    it.comment
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun cacheWeek(cwDir: File?, weekStart: LocalDate, entries: List<WorklogEntry>) {
+        val dir = cwDir ?: return
+        try {
+            weekCacheDir(dir).mkdirs()
+            val cached = entries.map {
+                CachedWorklogEntry(
+                    it.issueKey,
+                    it.issueSummary,
+                    it.date.toString(),
+                    it.timeSpent,
+                    it.comment
+                )
+            }
+            weekCacheFile(dir, weekStart).writeText(gson.toJson(cached))
+        } catch (_: Exception) {
+        }
+    }
+
     // ── Time-project ticket list (for the Add Time dialog's dropdown) ──────────
 
     fun timeTicketsCacheFile(cwDir: File) = File(cwDir, "time-tickets.json")
