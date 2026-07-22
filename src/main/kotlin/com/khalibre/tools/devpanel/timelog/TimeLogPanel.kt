@@ -84,6 +84,9 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         preferredSize = Dimension(preferredSize.width, 1)
     }
 
+    private var currentEntries: List<WorklogEntry>? = null
+    private var displayedWeek: LocalDate? = null
+
     init {
         val heading = JPanel(BorderLayout()).apply {
             add(buildHeader(), BorderLayout.NORTH)
@@ -143,26 +146,76 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         val dir = cwDir
         if (dir == null) {
             statusLabel.text = "No git project detected"
+            currentEntries = emptyList()
+            displayedWeek = weekStart
             buildEmptyGrid()
             return
         }
 
-        statusLabel.text = "Loading…"
+        val requestedWeek = weekStart
+
+        if (displayedWeek != requestedWeek) {
+            val cached = TimeLogService.loadCachedWeek(dir, requestedWeek)
+            displayedWeek = requestedWeek
+            if (cached != null) {
+                currentEntries = cached
+                renderGrid(cached)
+            } else {
+                currentEntries = null
+                buildLoadingGrid()
+            }
+        }
+
+        statusLabel.text = if (currentEntries == null) "Loading…" else ""
         setReloadSpinning(true)
-        val weekEnd = weekStart.plusDays(4)
+        val weekEnd = requestedWeek.plusDays(4)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = TimeLogService.fetchWeekWorklogs(weekStart, weekEnd, dir)
+            val result = TimeLogService.fetchWeekWorklogs(requestedWeek, weekEnd, dir)
+            result.onSuccess { entries -> TimeLogService.cacheWeek(dir, requestedWeek, entries) }
             SwingUtilities.invokeLater {
+                if (requestedWeek != weekStart) return@invokeLater
                 setReloadSpinning(false)
                 result.onSuccess { entries ->
                     statusLabel.text = ""
+                    currentEntries = entries
                     renderGrid(entries)
                 }.onFailure {
-                    statusLabel.text = "✘ ${it.message}"
-                    buildEmptyGrid()
+                    if (currentEntries == null) {
+                        statusLabel.text = "✘ ${it.message}"
+                        buildEmptyGrid()
+                    } else {
+                        // We already have cached/optimistic data showing — don't blow it away
+                        // over a failed background refresh, just surface the error quietly.
+                        statusLabel.text = "✘ ${it.message} (showing cached data)"
+                    }
                 }
             }
         }
+    }
+
+    /** Instantly reflects a just-added worklog in the grid without waiting on a fresh fetch —
+     *  the background reload() triggered right after this will reconcile with Jira's true state. */
+    fun addEntryOptimistically(entry: WorklogEntry) {
+        val merged = (currentEntries ?: emptyList()) + entry
+        currentEntries = merged
+        renderGrid(merged)
+        val dir = cwDir
+        val week = weekStart
+        if (dir != null) {
+            ApplicationManager.getApplication().executeOnPooledThread {
+                TimeLogService.cacheWeek(dir, week, merged)
+            }
+        }
+    }
+
+    private fun buildLoadingGrid() {
+        daysGrid.removeAll()
+        for (i in 0 until 5) {
+            val date = weekStart.plusDays(i.toLong())
+            daysGrid.add(buildDayColumn(date, null))
+        }
+        daysGrid.revalidate()
+        daysGrid.repaint()
     }
 
     private fun buildEmptyGrid() {
@@ -188,8 +241,10 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // ── Day column ───────────────────────────────────────────────────────────
 
-    private fun buildDayColumn(date: LocalDate, items: List<WorklogEntry>): JComponent {
-        val totalMinutes = items.sumOf { parseDurationToMinutes(it.timeSpent) }
+    /** [items] == null means "still loading, we don't know yet" — distinct from an empty list,
+     *  which means we already know nothing was logged that day. */
+    private fun buildDayColumn(date: LocalDate, items: List<WorklogEntry>?): JComponent {
+        val totalMinutes = items?.sumOf { parseDurationToMinutes(it.timeSpent) } ?: 0
         val dayName = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
 
         val header = JPanel(BorderLayout()).apply {
@@ -197,7 +252,7 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(JBLabel("$dayName ${date.dayOfMonth}").apply {
                 font = font.deriveFont(Font.BOLD, font.size - 1f)
             }, BorderLayout.WEST)
-            add(JBLabel(formatMinutes(totalMinutes)).apply {
+            add(JBLabel(if (items == null) "" else formatMinutes(totalMinutes)).apply {
                 font = font.deriveFont(font.size - 2f)
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
             }, BorderLayout.EAST)
@@ -205,21 +260,31 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val cardsBox = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            if (items.isEmpty()) {
-                add(JBLabel("No time logged").apply {
+            when {
+                items == null -> add(JBLabel("Loading…").apply {
                     font = font.deriveFont(font.size - 2f)
                     foreground = JBUI.CurrentTheme.Label.disabledForeground()
                     alignmentX = Component.LEFT_ALIGNMENT
                     border = JBUI.Borders.emptyBottom(8)
                 })
-            } else {
-                items.forEach { entry ->
+
+                items.isEmpty() -> add(JBLabel("No time logged").apply {
+                    font = font.deriveFont(font.size - 2f)
+                    foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.emptyBottom(8)
+                })
+
+                else -> items.forEach { entry ->
                     add(buildEntryCard(entry))
                     add(Box.createVerticalStrut(6))
                 }
             }
             add(CardUtils.makeActionButton("+ Add time") {
-                AddTimeDialog(project, date) { reload() }.show()
+                AddTimeDialog(project, date) { entry ->
+                    addEntryOptimistically(entry)
+                    reload()
+                }.show()
             }.apply { alignmentX = Component.LEFT_ALIGNMENT })
             add(Box.createVerticalGlue())
         }
