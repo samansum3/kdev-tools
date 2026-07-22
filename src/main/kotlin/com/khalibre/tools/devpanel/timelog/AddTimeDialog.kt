@@ -85,13 +85,18 @@ class AddTimeDialog(
         val dir = cwDir ?: return
         issuePicker.text = "Loading…"
         issuePicker.isEnabled = false
-        issuePicker.setInitialSearchQuery(TimeLogService.loadRememberedSearchQuery(dir))
-        issuePicker.setOnSearchChanged { query -> TimeLogService.rememberSearchQuery(dir, query) }
+        issuePicker.setOnSearchChanged { query ->
+            ApplicationManager.getApplication().executeOnPooledThread {
+                TimeLogService.rememberSearchQuery(dir, query)
+            }
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             val tickets = TimeLogService.loadTimeTickets(dir)
+            val rememberedQuery = TimeLogService.loadRememberedSearchQuery(dir)
             SwingUtilities.invokeLater {
                 issuePicker.isEnabled = true
                 issuePicker.setItems(tickets)
+                issuePicker.setInitialSearchQuery(rememberedQuery)
                 issuePicker.setOnSelected { updateOkEnabled() }
                 updateOkEnabled()
             }

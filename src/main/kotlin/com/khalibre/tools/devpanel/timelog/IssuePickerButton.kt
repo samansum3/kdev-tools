@@ -106,6 +106,7 @@ class IssuePickerButton : JButton("Select ticket…") {
         items.forEach { listModel.addElement(it) }
 
         val list = JBList(listModel).apply {
+            fixedCellHeight = JBUI.scale(24)
             cellRenderer = javax.swing.ListCellRenderer<TimeTicketInfo> { l, value, _, isSelected, _ ->
                 javax.swing.JLabel(label(value)).apply {
                     border = JBUI.Borders.empty(4, 8)
@@ -134,6 +135,7 @@ class IssuePickerButton : JButton("Select ticket…") {
             emptyText.text = "Search by key or summary…"
             text = initialSearchQuery
         }
+        var lastPersistedQuery = initialSearchQuery
         val clearableExtension = ExtendableTextComponent.Extension.create(
             AllIcons.Actions.Close, AllIcons.Actions.CloseHovered, "Clear search"
         ) { searchField.text = "" }
@@ -141,7 +143,7 @@ class IssuePickerButton : JButton("Select ticket…") {
         fun applyFilter() {
             val query = searchField.text.trim()
             initialSearchQuery = query
-            onSearchChanged?.invoke(query)
+
             val lower = query.lowercase()
             listModel.clear()
             val filtered = if (lower.isBlank()) items
@@ -174,6 +176,23 @@ class IssuePickerButton : JButton("Select ticket…") {
             .setRequestFocus(true)
             .setResizable(true)
             .createPopup()
+
+        fun persistSearchQuery() {
+            val query = searchField.text.trim()
+            if (query != lastPersistedQuery) {
+                lastPersistedQuery = query
+                onSearchChanged?.invoke(query)
+            }
+        }
+
+        searchField.addFocusListener(object : java.awt.event.FocusAdapter() {
+            override fun focusLost(e: java.awt.event.FocusEvent) = persistSearchQuery()
+        })
+        popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
+            override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
+                persistSearchQuery()
+            }
+        })
 
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
