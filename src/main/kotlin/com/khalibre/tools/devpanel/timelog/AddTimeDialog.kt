@@ -42,7 +42,7 @@ private val DATE_OPTION_FORMAT: DateTimeFormatter =
 class AddTimeDialog(
     private val project: Project,
     private val defaultDate: LocalDate,
-    private val onLogged: () -> Unit
+    private val onLogged: (WorklogEntry) -> Unit
 ) : DialogWrapper(project, true) {
 
     private val cwDir = ProjectPaths.cwDir(project)
@@ -177,7 +177,7 @@ class AddTimeDialog(
             SwingUtilities.invokeLater {
                 setBusy(false)
                 result.onSuccess {
-                    onLogged()
+                    onLogged(WorklogEntry(ticket.key, ticket.summary, date, timeSpent, description))
                     super@AddTimeDialog.doOKAction()
                 }.onFailure {
                     setErrorText(it.message ?: "Failed to add time")
