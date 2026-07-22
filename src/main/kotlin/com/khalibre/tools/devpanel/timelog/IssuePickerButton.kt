@@ -28,12 +28,13 @@ class IssuePickerButton : JButton("Select ticket…") {
     private var initialSearchQuery: String = ""
     private var onSearchChanged: ((String) -> Unit)? = null
 
-    private val maxWidth = JBUI.scale(180)
+    private val maxWidth = JBUI.scale(220)
     private fun naturalPreferredSize(): Dimension = super.getPreferredSize()
     private val fixedSize: Dimension by lazy { Dimension(maxWidth, naturalPreferredSize().height) }
 
     init {
         horizontalAlignment = SwingConstants.LEFT
+        margin = JBUI.insets(2, 4)
         addActionListener { showPopup() }
         applyLabel("Select ticket…")
     }
