@@ -5,15 +5,16 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
 import com.khalibre.tools.devpanel.common.ProjectPaths
-import java.awt.BorderLayout
-import java.awt.Dimension
-import java.awt.GridLayout
+import java.awt.*
+import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.*
 import javax.swing.*
 
@@ -34,6 +35,10 @@ private fun buildDurationOptions(): List<String> {
     return options
 }
 
+/** e.g. "Wednesday, July 22, 2026" */
+private val DATE_OPTION_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy", Locale.ENGLISH)
+
 class AddTimeDialog(
     private val project: Project,
     private val defaultDate: LocalDate,
@@ -44,10 +49,17 @@ class AddTimeDialog(
 
     private val issuePicker = IssuePickerButton()
     private val timeCombo = ComboBox(buildDurationOptions().toTypedArray())
-    private val dateSpinner = JSpinner(SpinnerDateModel()).apply {
-        editor = JSpinner.DateEditor(this, "yyyy-MM-dd")
-        value = toDate(defaultDate)
+
+    // Mon–Fri of the week containing defaultDate — the week currently shown in TimeLogPanel.
+    private val weekDateOptions: List<LocalDate> = run {
+        val monday = defaultDate.with(DayOfWeek.MONDAY)
+        (0..4).map { monday.plusDays(it.toLong()) }
     }
+    private val dateCombo = ComboBox(weekDateOptions.toTypedArray()).apply {
+        renderer = SimpleListCellRenderer.create("") { it.format(DATE_OPTION_FORMAT) }
+        selectedItem = defaultDate
+    }
+
     private val descriptionArea = JBTextArea(4, 30).apply { lineWrap = true; wrapStyleWord = true }
 
     private var busy = false
@@ -61,14 +73,29 @@ class AddTimeDialog(
     }
 
     override fun createCenterPanel(): JComponent {
-        val topRow = JPanel(GridLayout(1, 3, 12, 0)).apply {
-            add(labeled("Time code", issuePicker))
-            add(labeled("Time", timeCombo))
-            add(labeled("Date", dateSpinner))
+        val topRow = JPanel(GridBagLayout()).apply {
+            val gc = GridBagConstraints().apply {
+                fill = GridBagConstraints.HORIZONTAL
+                insets = Insets(0, 0, 0, 12)
+                weighty = 1.0
+            }
+
+            gc.gridx = 0
+            gc.weightx = 4.0
+            add(labeled("Time code", issuePicker), gc)
+
+            gc.gridx = 1
+            gc.weightx = 2.0
+            add(labeled("Time", timeCombo), gc)
+
+            gc.gridx = 2
+            gc.weightx = 3.0
+            gc.insets = Insets(0, 0, 0, 0)
+            add(labeled("Date", dateCombo), gc)
         }
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            preferredSize = Dimension(520, 260)
+            preferredSize = Dimension(520, 160)
             add(topRow)
             add(Box.createVerticalStrut(10))
             add(labeled("Description", JBScrollPane(descriptionArea)))
@@ -90,14 +117,27 @@ class AddTimeDialog(
                 TimeLogService.rememberSearchQuery(dir, query)
             }
         }
+        issuePicker.setOnSelected { updateOkEnabled() }
+
         ApplicationManager.getApplication().executeOnPooledThread {
             val tickets = TimeLogService.loadTimeTickets(dir)
             val rememberedQuery = TimeLogService.loadRememberedSearchQuery(dir)
+            val rememberedTicketKey = TimeLogService.loadLastTicketKey(dir)
+            val rememberedDuration = TimeLogService.loadLastDuration(dir)
             SwingUtilities.invokeLater {
                 issuePicker.isEnabled = true
                 issuePicker.setItems(tickets)
                 issuePicker.setInitialSearchQuery(rememberedQuery)
-                issuePicker.setOnSelected { updateOkEnabled() }
+
+                // Default to the last-used ticket/duration so repeated entries (e.g. a daily
+                // stand-up log) don't require re-selecting the same thing every time.
+                rememberedTicketKey?.let { key ->
+                    tickets.firstOrNull { it.key == key }?.let { issuePicker.setSelected(it) }
+                }
+                if (rememberedDuration != null && rememberedDuration in buildDurationOptions()) {
+                    timeCombo.selectedItem = rememberedDuration
+                }
+
                 updateOkEnabled()
             }
         }
@@ -122,12 +162,16 @@ class AddTimeDialog(
 
         val ticket = issuePicker.selectedTicket()!!
         val timeSpent = timeCombo.selectedItem as String
-        val date = toLocalDate(dateSpinner.value as Date)
+        val date = dateCombo.selectedItem as LocalDate
         val description = descriptionArea.text.trim()
 
         setBusy(true)
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = TimeLogService.addWorklog(ticket.key, timeSpent, date, description, cwDir)
+            result.onSuccess {
+                TimeLogService.rememberLastTicketKey(cwDir, ticket.key)
+                TimeLogService.rememberLastDuration(cwDir, timeSpent)
+            }
             SwingUtilities.invokeLater {
                 setBusy(false)
                 result.onSuccess {
@@ -145,27 +189,8 @@ class AddTimeDialog(
         updateOkEnabled()
         issuePicker.isEnabled = !busy
         timeCombo.isEnabled = !busy
-        dateSpinner.isEnabled = !busy
+        dateCombo.isEnabled = !busy
         descriptionArea.isEnabled = !busy
         okAction.putValue(Action.NAME, if (busy) "Adding…" else "Add")
-    }
-
-    companion object {
-        private fun toDate(date: LocalDate): Date {
-            val cal = Calendar.getInstance()
-            cal.set(date.year, date.monthValue - 1, date.dayOfMonth, 0, 0, 0)
-            cal.set(Calendar.MILLISECOND, 0)
-            return cal.time
-        }
-
-        private fun toLocalDate(date: Date): LocalDate {
-            val cal = Calendar.getInstance()
-            cal.time = date
-            return LocalDate.of(
-                cal.get(Calendar.YEAR),
-                cal.get(Calendar.MONTH) + 1,
-                cal.get(Calendar.DAY_OF_MONTH)
-            )
-        }
     }
 }
