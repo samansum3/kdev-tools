@@ -52,6 +52,49 @@ object TimeLogService {
         }
     }
 
+    fun lastTicketKeyCacheFile(cwDir: File) = File(cwDir, "timelog-last-ticket.txt")
+
+    /** Ticket key used the last time a worklog was successfully added, so Add Time can default
+     *  to it (repeated entries like "Daily stand-up" shouldn't require re-selecting every time). */
+    fun loadLastTicketKey(cwDir: File?): String? {
+        val file = cwDir?.let { lastTicketKeyCacheFile(it) } ?: return null
+        return if (file.exists()) try {
+            file.readText().trim().ifBlank { null }
+        } catch (_: Exception) {
+            null
+        } else null
+    }
+
+    fun rememberLastTicketKey(cwDir: File?, key: String) {
+        val dir = cwDir ?: return
+        try {
+            dir.mkdirs()
+            lastTicketKeyCacheFile(dir).writeText(key)
+        } catch (_: Exception) {
+        }
+    }
+
+    fun lastDurationCacheFile(cwDir: File) = File(cwDir, "timelog-last-duration.txt")
+
+    /** Duration used the last time a worklog was successfully added. */
+    fun loadLastDuration(cwDir: File?): String? {
+        val file = cwDir?.let { lastDurationCacheFile(it) } ?: return null
+        return if (file.exists()) try {
+            file.readText().trim().ifBlank { null }
+        } catch (_: Exception) {
+            null
+        } else null
+    }
+
+    fun rememberLastDuration(cwDir: File?, duration: String) {
+        val dir = cwDir ?: return
+        try {
+            dir.mkdirs()
+            lastDurationCacheFile(dir).writeText(duration)
+        } catch (_: Exception) {
+        }
+    }
+
     // ── Time-project ticket list (for the Add Time dialog's dropdown) ──────────
 
     fun timeTicketsCacheFile(cwDir: File) = File(cwDir, "time-tickets.json")
@@ -129,7 +172,10 @@ object TimeLogService {
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
 
-        val started = OffsetDateTime.of(date.atTime(9, 0), ZoneId.systemDefault().rules.getOffset(date.atTime(9, 0)))
+        val started = OffsetDateTime.of(
+            date.atTime(9, 0),
+            ZoneId.systemDefault().rules.getOffset(date.atTime(9, 0))
+        )
             .format(startedFormatter)
 
         val payload = JsonObject().apply {
@@ -195,7 +241,11 @@ object TimeLogService {
      *      step 1 from one worklog but also carry unrelated worklogs from teammates or other
      *      dates that must be filtered out here).
      */
-    fun fetchWeekWorklogs(weekStart: LocalDate, weekEnd: LocalDate, cwDir: File?): Result<List<WorklogEntry>> {
+    fun fetchWeekWorklogs(
+        weekStart: LocalDate,
+        weekEnd: LocalDate,
+        cwDir: File?
+    ): Result<List<WorklogEntry>> {
         if (cwDir == null) return Result.failure(RuntimeException("No project detected"))
 
         val myAccountId = JiraUserService.currentAccountId(cwDir)
@@ -213,7 +263,13 @@ object TimeLogService {
             )
         )
         if (searchResult.exitCode != 0)
-            return Result.failure(RuntimeException("acli error: ${searchResult.stderr.take(200).ifBlank { "search failed" }}"))
+            return Result.failure(
+                RuntimeException(
+                    "acli error: ${
+                        searchResult.stderr.take(200).ifBlank { "search failed" }
+                    }"
+                )
+            )
         if (searchResult.stdout.isBlank()) return Result.success(emptyList())
 
         val issues: List<Pair<String, String>> = try {
@@ -262,7 +318,10 @@ object TimeLogService {
         // Cheap probe to learn the total count, so we can jump straight to the last page
         // instead of paging through potentially thousands of old entries from the start.
         val total = try {
-            val probeConn = openJiraConn(cwDir, "$baseUrl/rest/api/3/issue/$issueKey/worklog?startAt=0&maxResults=1")
+            val probeConn = openJiraConn(
+                cwDir,
+                "$baseUrl/rest/api/3/issue/$issueKey/worklog?startAt=0&maxResults=1"
+            )
             if (probeConn.responseCode != 200) return emptyList()
             JsonParser.parseString(probeConn.inputStream.bufferedReader().readText())
                 .asJsonObject.get("total")?.asInt ?: 0
@@ -278,7 +337,8 @@ object TimeLogService {
                 "$baseUrl/rest/api/3/issue/$issueKey/worklog?startAt=$startAt&maxResults=$pageSize"
             )
             if (conn.responseCode != 200) return emptyList()
-            val root = JsonParser.parseString(conn.inputStream.bufferedReader().readText()).asJsonObject
+            val root =
+                JsonParser.parseString(conn.inputStream.bufferedReader().readText()).asJsonObject
             val worklogs = root.getAsJsonArray("worklogs") ?: return emptyList()
 
             worklogs.mapNotNull { el ->
