@@ -28,7 +28,9 @@ class IssuePickerButton : JButton("Select ticket…") {
     private var initialSearchQuery: String = ""
     private var onSearchChanged: ((String) -> Unit)? = null
 
-    private val maxWidth = JBUI.scale(220)
+    private val maxWidth = JBUI.scale(180)
+    private fun naturalPreferredSize(): Dimension = super.getPreferredSize()
+    private val fixedSize: Dimension by lazy { Dimension(maxWidth, naturalPreferredSize().height) }
 
     init {
         horizontalAlignment = SwingConstants.LEFT
@@ -36,15 +38,14 @@ class IssuePickerButton : JButton("Select ticket…") {
         applyLabel("Select ticket…")
     }
 
-    /** Keeps the button's width capped regardless of how long the selected ticket's text is —
+    /** Keeps the button's size fully fixed regardless of how long the selected ticket's text is —
      *  without this, a long "<Key>: <summary>" would grow this button (and therefore the whole
-     *  Add Time dialog, since it sits in a GridLayout row) every time a different ticket is picked. */
-    override fun getPreferredSize(): Dimension {
-        val base = super.getPreferredSize()
-        return Dimension(minOf(base.width, maxWidth), base.height)
-    }
-
-    override fun getMaximumSize(): Dimension = preferredSize
+     *  Add Time dialog, since it sits in a GridLayout row) every time a different ticket is picked.
+     *  Computed once from the button's natural preferred size (before any text ever grows it),
+     *  then reported as a constant from here on — no code path can make this vary with text. */
+    override fun getPreferredSize(): Dimension = fixedSize
+    override fun getMinimumSize(): Dimension = fixedSize
+    override fun getMaximumSize(): Dimension = fixedSize
 
     /** Sets [full] as the tooltip and displays it truncated with an ellipsis if it doesn't fit
      *  within [maxWidth]. */
