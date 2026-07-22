@@ -105,15 +105,18 @@ object TimeLogService {
         val comment: String
     )
 
-    private fun weekCacheDir(cwDir: File) = File(cwDir, "time-log")
+    private fun weekCacheDir(cwDir: File, accountId: String): File {
+        val safe = accountId.replace(Regex("[^A-Za-z0-9_\\-]"), "_")
+        return File(File(cwDir, "time-log"), safe)
+    }
 
-    private fun weekCacheFile(cwDir: File, weekStart: LocalDate) =
-        File(weekCacheDir(cwDir), "$weekStart.json")
+    private fun weekCacheFile(cwDir: File, accountId: String, weekStart: LocalDate) =
+        File(weekCacheDir(cwDir, accountId), "$weekStart.json")
 
-    /** Cached worklogs for the week starting [weekStart], or null if nothing's cached yet. */
-    fun loadCachedWeek(cwDir: File?, weekStart: LocalDate): List<WorklogEntry>? {
+    /** Cached worklogs for [accountId]'s week starting [weekStart], or null if nothing's cached. */
+    fun loadCachedWeek(cwDir: File?, accountId: String, weekStart: LocalDate): List<WorklogEntry>? {
         val dir = cwDir ?: return null
-        val file = weekCacheFile(dir, weekStart)
+        val file = weekCacheFile(dir, accountId, weekStart)
         if (!file.exists()) return null
         return try {
             val type =
@@ -133,10 +136,15 @@ object TimeLogService {
         }
     }
 
-    fun cacheWeek(cwDir: File?, weekStart: LocalDate, entries: List<WorklogEntry>) {
+    fun cacheWeek(
+        cwDir: File?,
+        accountId: String,
+        weekStart: LocalDate,
+        entries: List<WorklogEntry>
+    ) {
         val dir = cwDir ?: return
         try {
-            weekCacheDir(dir).mkdirs()
+            weekCacheDir(dir, accountId).mkdirs()
             val cached = entries.map {
                 CachedWorklogEntry(
                     it.issueKey,
@@ -146,7 +154,7 @@ object TimeLogService {
                     it.comment
                 )
             }
-            weekCacheFile(dir, weekStart).writeText(gson.toJson(cached))
+            weekCacheFile(dir, accountId, weekStart).writeText(gson.toJson(cached))
         } catch (_: Exception) {
         }
     }
@@ -286,28 +294,30 @@ object TimeLogService {
     // ── Weekly aggregate fetch ───────────────────────────────────────────────────
 
     /**
-     * Returns every worklog the current user logged between [weekStart] and [weekEnd] (inclusive),
-     * across any issue/project — not just the configured Time project.
+     * Returns every worklog logged by [forAccountId] (defaults to the current Jira user) between
+     * [weekStart] and [weekEnd] (inclusive), across any issue/project — not just the configured
+     * Time project.
      *
      * Two-step approach:
-     *   1. JQL `worklogAuthor = currentUser() AND worklogDate >= ... AND worklogDate <= ...`
+     *   1. JQL `worklogAuthor = "<accountId>" AND worklogDate >= ... AND worklogDate <= ...`
      *      (via acli) to find which issues have relevant worklogs at all.
      *   2. For each issue, fetch its worklogs directly via REST and keep only entries that are
-     *      both authored by the current user AND fall inside the date range (an issue can match
+     *      both authored by that account AND fall inside the date range (an issue can match
      *      step 1 from one worklog but also carry unrelated worklogs from teammates or other
      *      dates that must be filtered out here).
      */
     fun fetchWeekWorklogs(
         weekStart: LocalDate,
         weekEnd: LocalDate,
-        cwDir: File?
+        cwDir: File?,
+        forAccountId: String? = null
     ): Result<List<WorklogEntry>> {
         if (cwDir == null) return Result.failure(RuntimeException("No project detected"))
 
-        val myAccountId = JiraUserService.currentAccountId(cwDir)
-            ?: return Result.failure(RuntimeException("Couldn't resolve current Jira user"))
+        val targetAccountId = forAccountId ?: JiraUserService.currentAccountId(cwDir)
+        ?: return Result.failure(RuntimeException("Couldn't resolve current Jira user"))
 
-        val jql = "worklogAuthor = currentUser() AND worklogDate >= \"$weekStart\" " +
+        val jql = "worklogAuthor = \"$targetAccountId\" AND worklogDate >= \"$weekStart\" " +
                 "AND worklogDate <= \"$weekEnd\" ORDER BY key ASC"
 
         val searchResult = PrService.runCmd(
@@ -348,7 +358,14 @@ object TimeLogService {
 
         val entries = mutableListOf<WorklogEntry>()
         for ((key, summary) in issues) {
-            entries += fetchOwnWorklogsInRange(key, summary, myAccountId, weekStart, weekEnd, cwDir)
+            entries += fetchWorklogsInRangeForAuthor(
+                key,
+                summary,
+                targetAccountId,
+                weekStart,
+                weekEnd,
+                cwDir
+            )
         }
         return Result.success(entries)
     }
@@ -356,12 +373,12 @@ object TimeLogService {
     /**
      * Fetches worklogs for a single issue, requesting only the most-recent page (issues can carry
      * thousands of historical worklogs from other users/testing — see jlog's pagination fix),
-     * then filters down to [myAccountId]'s entries within [weekStart]..[weekEnd].
+     * then filters down to [targetAccountId]'s entries within [weekStart]..[weekEnd].
      */
-    private fun fetchOwnWorklogsInRange(
+    private fun fetchWorklogsInRangeForAuthor(
         issueKey: String,
         issueSummary: String,
-        myAccountId: String,
+        targetAccountId: String,
         weekStart: LocalDate,
         weekEnd: LocalDate,
         cwDir: File,
@@ -401,7 +418,7 @@ object TimeLogService {
                 try {
                     val obj = el.asJsonObject
                     val authorId = obj.getAsJsonObject("author")?.get("accountId")?.asString
-                    if (authorId != myAccountId) return@mapNotNull null
+                    if (authorId != targetAccountId) return@mapNotNull null
 
                     val startedStr = obj.get("started")?.asString ?: return@mapNotNull null
                     val date = OffsetDateTime.parse(startedStr, startedFormatter).toLocalDate()

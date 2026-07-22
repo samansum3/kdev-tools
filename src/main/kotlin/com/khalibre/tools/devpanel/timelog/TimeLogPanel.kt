@@ -3,12 +3,14 @@ package com.khalibre.tools.devpanel.timelog
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.khalibre.tools.devpanel.common.CardUtils
 import com.khalibre.tools.devpanel.common.ProjectPaths
+import com.khalibre.tools.devpanel.tickets.JiraUserService
 import java.awt.*
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -26,6 +28,9 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
     // Monday of the currently displayed week.
     private var weekStart: LocalDate = LocalDate.now().with(DayOfWeek.MONDAY)
 
+    private var selectedAccountId: String? = null
+    private var myAccountId: String? = null
+
     private val rangeLabel = JBLabel("", SwingConstants.CENTER).apply {
         font = font.deriveFont(font.size + 1f)
     }
@@ -33,6 +38,42 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         font = font.deriveFont(font.size - 1f)
         foreground = JBUI.CurrentTheme.Label.disabledForeground()
     }
+
+    private val userCombo: ComboBox<JiraUserService.JiraUser> =
+        ComboBox<JiraUserService.JiraUser>().also { combo ->
+            combo.renderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean
+                ): Component {
+                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    val user = value as? JiraUserService.JiraUser
+                    text = user?.displayName ?: ""
+                    icon = user?.let { u ->
+                        JiraUserService.resolveAvatarIcon(
+                            u,
+                            cwDir
+                        ) { combo.repaint() }
+                    }
+                    iconTextGap = 6
+                    border = JBUI.Borders.empty(2, 4)
+                    return this
+                }
+            }
+            combo.preferredSize = Dimension(JBUI.scale(170), combo.preferredSize.height)
+            combo.addActionListener {
+                val user =
+                    combo.selectedItem as? JiraUserService.JiraUser ?: return@addActionListener
+                if (user.accountId == selectedAccountId) return@addActionListener
+                selectedAccountId = user.accountId
+                displayedWeek = null
+                currentEntries = null
+                reload()
+            }
+        }
 
     // Reload icon — same styling/spin pattern as TicketTabsPanel's reloadButton. Spins both on
     // manual click and while a week switch (prev/next) is loading.
@@ -84,6 +125,8 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         preferredSize = Dimension(preferredSize.width, 1)
     }
 
+    // What's currently rendered, and for which week — null means "nothing to show yet" (as
+    // opposed to an empty list, which means "we checked, there's genuinely nothing logged").
     private var currentEntries: List<WorklogEntry>? = null
     private var displayedWeek: LocalDate? = null
 
@@ -103,10 +146,10 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         add(scroll, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
 
-        reload()
+        initUserAndLoad()
     }
 
-    // ── Header: [◀ date range ▶] (tightly grouped)  ...  [reload icon] ─────────
+    // ── Header: [user combo]  [◀ date range ▶] (tightly grouped)  ...  [reload icon] ─────────
 
     private fun buildHeader(): JComponent {
         val prevBtn = iconNavButton(AllIcons.Actions.Back, "Previous week") {
@@ -121,11 +164,16 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(rangeLabel)
             add(nextBtn)
         }
+        val userWrap = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
+            add(userCombo)
+        }
         val reloadWrap = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
             isOpaque = false
             add(reloadButton)
         }
         return JPanel(BorderLayout()).apply {
+            add(userWrap, BorderLayout.WEST)
             add(navGroup, BorderLayout.CENTER)
             add(reloadWrap, BorderLayout.EAST)
         }
@@ -138,14 +186,43 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
             "${weekStart.format(fmt)} – ${weekEnd.format(DateTimeFormatter.ofPattern("d, yyyy"))}"
     }
 
+    // ── Initial load: resolve users + "me" before the very first fetch ─────────
+
+    private fun initUserAndLoad() {
+        val dir = cwDir
+        if (dir == null) {
+            reload()
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val users = JiraUserService.loadUsers(dir)
+            val me = JiraUserService.currentAccountId(dir)
+            SwingUtilities.invokeLater {
+                val meUser = users.firstOrNull { it.accountId == me }
+                val (meFirst, rest) = users.partition { it.accountId == me }
+                val ordered = meFirst + rest
+                val model = DefaultComboBoxModel<JiraUserService.JiraUser>()
+                ordered.forEach { model.addElement(it) }
+                userCombo.model = model
+                if (meUser != null) userCombo.selectedItem = meUser
+
+                myAccountId = me
+                selectedAccountId = me ?: users.firstOrNull()?.accountId
+                reload()
+            }
+        }
+    }
+
     // ── Reload ───────────────────────────────────────────────────────────────
 
-    /** Called by AddTimeDialog after a successful add, and by the week-navigation buttons. */
+    /** Called after a successful add, by the week-navigation buttons, by the user combo, and by
+     *  the reload icon. */
     fun reload() {
         updateRangeLabel()
         val dir = cwDir
-        if (dir == null) {
-            statusLabel.text = "No git project detected"
+        val accountId = selectedAccountId
+        if (dir == null || accountId == null) {
+            statusLabel.text = if (dir == null) "No git project detected" else "Loading…"
             currentEntries = emptyList()
             displayedWeek = weekStart
             buildEmptyGrid()
@@ -155,7 +232,10 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         val requestedWeek = weekStart
 
         if (displayedWeek != requestedWeek) {
-            val cached = TimeLogService.loadCachedWeek(dir, requestedWeek)
+            // Switching to a week/user we're not currently showing — never leave the previous
+            // selection's columns on screen under the new header. Show cache if we have one,
+            // otherwise an explicit Loading placeholder.
+            val cached = TimeLogService.loadCachedWeek(dir, accountId, requestedWeek)
             displayedWeek = requestedWeek
             if (cached != null) {
                 currentEntries = cached
@@ -165,15 +245,26 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                 buildLoadingGrid()
             }
         }
+        // else: same week/user already on screen (manual refresh, or right after an optimistic
+        // add) — leave the current view as-is; only the background fetch below may replace it.
 
         statusLabel.text = if (currentEntries == null) "Loading…" else ""
         setReloadSpinning(true)
         val weekEnd = requestedWeek.plusDays(4)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = TimeLogService.fetchWeekWorklogs(requestedWeek, weekEnd, dir)
-            result.onSuccess { entries -> TimeLogService.cacheWeek(dir, requestedWeek, entries) }
+            val result = TimeLogService.fetchWeekWorklogs(requestedWeek, weekEnd, dir, accountId)
+            result.onSuccess { entries ->
+                TimeLogService.cacheWeek(
+                    dir,
+                    accountId,
+                    requestedWeek,
+                    entries
+                )
+            }
             SwingUtilities.invokeLater {
-                if (requestedWeek != weekStart) return@invokeLater
+                // The user may have switched weeks/users again before this came back — ignore
+                // stale responses rather than overwriting whatever's actually on screen now.
+                if (requestedWeek != weekStart || accountId != selectedAccountId) return@invokeLater
                 setReloadSpinning(false)
                 result.onSuccess { entries ->
                     statusLabel.text = ""
@@ -194,16 +285,21 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     /** Instantly reflects a just-added worklog in the grid without waiting on a fresh fetch —
-     *  the background reload() triggered right after this will reconcile with Jira's true state. */
+     *  the background reload() triggered right after this will reconcile with Jira's true state.
+     *  Only applies when viewing your own log: Jira always attributes a new worklog to the
+     *  authenticated user, so if you're currently viewing someone else's log, this entry doesn't
+     *  actually belong in their columns and is skipped. */
     fun addEntryOptimistically(entry: WorklogEntry) {
+        if (selectedAccountId != myAccountId) return
         val merged = (currentEntries ?: emptyList()) + entry
         currentEntries = merged
         renderGrid(merged)
         val dir = cwDir
+        val accountId = selectedAccountId
         val week = weekStart
-        if (dir != null) {
+        if (dir != null && accountId != null) {
             ApplicationManager.getApplication().executeOnPooledThread {
-                TimeLogService.cacheWeek(dir, week, merged)
+                TimeLogService.cacheWeek(dir, accountId, week, merged)
             }
         }
     }
