@@ -173,11 +173,23 @@ class AddTimeDialog(
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = TimeLogService.addWorklog(ticket.key, timeSpent, date, description, cwDir)
-            result.onSuccess {
+            result.onSuccess { worklogId ->
                 TimeLogService.rememberLastTicketKey(cwDir, ticket.key)
                 TimeLogService.rememberLastDuration(cwDir, timeSpent)
+                val addedEntry =
+                    WorklogEntry(
+                        ticket.key,
+                        worklogId,
+                        ticket.summary,
+                        date,
+                        timeSpent,
+                        description
+                    )
+                SwingUtilities.invokeLater { onResult(addedEntry, result) }
             }
-            SwingUtilities.invokeLater { onResult(optimisticEntry, result) }
+            result.onFailure {
+                SwingUtilities.invokeLater { onResult(optimisticEntry, result) }
+            }
         }
     }
 }

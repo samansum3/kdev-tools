@@ -259,44 +259,28 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    /** Instantly reflects a just-added worklog in the grid without waiting on a fresh fetch —
-     *  the background reload() triggered right after this will reconcile with Jira's true state.
-     *  Only applies when viewing your own log: Jira always attributes a new worklog to the
-     *  authenticated user, so if you're currently viewing someone else's log, this entry doesn't
-     *  actually belong in their columns and is skipped. */
     fun addEntryOptimistically(entry: WorklogEntry) {
-        if (selectedAccountId != myAccountId) return
-        val merged = (currentEntries ?: emptyList()) + entry
-        currentEntries = merged
-        renderGrid(merged)
-        val dir = cwDir
-        val accountId = selectedAccountId
-        val week = weekStart
-        if (dir != null && accountId != null) {
-            ApplicationManager.getApplication().executeOnPooledThread {
-                TimeLogService.cacheWeek(dir, accountId, week, merged)
-            }
-        }
+        // Consider future improvement only if Jira api would getting slow. At the moment it take less than 1s
     }
 
-    /** Reconciles the optimistic entry [addEntryOptimistically] rendered immediately against the
-     *  actual result of the background `addWorklog` call:
-     *   - success: patches the real Jira worklog id into that entry (so its remove button starts
-     *     working) and triggers a normal [reload] to converge on Jira's true state.
-     *   - failure: shows an error balloon anchored on [anchor], and once it fades/dismisses,
-     *     drops the optimistic entry that never actually made it into Jira.
-     */
     private fun handleAddResult(
         optimisticEntry: WorklogEntry,
         result: Result<String>,
         anchor: Component
     ) {
-        result.onSuccess { worklogId ->
-            val updated = (currentEntries ?: emptyList()).map {
-                if (it === optimisticEntry) it.copy(id = worklogId) else it
-            }
+        result.onSuccess {
+            val updated = (currentEntries ?: emptyList()) + optimisticEntry
             currentEntries = updated
             renderGrid(updated)
+
+            val dir = cwDir
+            val accountId = selectedAccountId
+            val week = weekStart
+            if (dir != null && accountId != null) {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    TimeLogService.cacheWeek(dir, accountId, week, updated)
+                }
+            }
         }.onFailure { error ->
             CardUtils.showResultBalloon(
                 "✘ Failed to add time: ${error.message}",
