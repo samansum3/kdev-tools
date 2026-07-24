@@ -399,13 +399,15 @@ object JiraService {
     fun currentUserEmail(cwDir: File?): String? =
         DevConfig.load(cwDir).jira.email.takeIf { it.isNotBlank() }
 
-    /**
-     * `acli jira workitem view <key> --fields summary --json` — same call the `create-pr`
-     * shell script makes to build the "TICKET-123: <summary>" PR title.
-     */
-    fun fetchTicketSummary(ticketKey: String): Result<String> {
+    /** Ticket data needed to build a PR: title text and (for the "Bug" tag) issue type. */
+    data class TicketDetails(val summary: String, val issueType: String?)
+
+    fun fetchTicketDetails(ticketKey: String): Result<TicketDetails> {
         val result = PrService.runCmd(
-            listOf("acli", "jira", "workitem", "view", ticketKey, "--fields", "summary", "--json")
+            listOf(
+                "acli", "jira", "workitem", "view", ticketKey,
+                "--fields", "summary,issuetype", "--json"
+            )
         )
         if (result.exitCode != 0 || result.stdout.isBlank())
             return Result.failure(
@@ -417,36 +419,14 @@ object JiraService {
             val root = JsonParser.parseString(result.stdout)
             val item =
                 if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
-            val summary = item.getAsJsonObject("fields").get("summary").asString.trim()
+            val fields = item.getAsJsonObject("fields")
+            val summary = fields.get("summary")?.asString?.trim().orEmpty()
             if (summary.isBlank())
-                Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
-            else Result.success(summary)
+                return Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
+            val issueType = fields.getAsJsonObject("issuetype")?.get("name")?.asString
+            Result.success(TicketDetails(summary, issueType))
         } catch (e: Exception) {
-            Result.failure(RuntimeException("Failed to parse summary from acli output."))
-        }
-    }
-
-    /**
-     * `acli jira workitem view <key> --fields issuetype --json` — used to decide whether a PR
-     * should get the "Bug" tag (see [CreatePrService]).
-     */
-    fun fetchTicketType(ticketKey: String): Result<String> {
-        val result = PrService.runCmd(
-            listOf("acli", "jira", "workitem", "view", ticketKey, "--fields", "issuetype", "--json")
-        )
-        if (result.exitCode != 0 || result.stdout.isBlank())
-            return Result.failure(RuntimeException("Failed to fetch Jira ticket '$ticketKey'."))
-        return try {
-            val root = JsonParser.parseString(result.stdout)
-            val item =
-                if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
-            val issueType =
-                item.getAsJsonObject("fields")?.getAsJsonObject("issuetype")?.get("name")?.asString
-            if (issueType.isNullOrBlank())
-                Result.failure(RuntimeException("Jira ticket '$ticketKey' returned no issue type."))
-            else Result.success(issueType)
-        } catch (e: Exception) {
-            Result.failure(RuntimeException("Failed to parse issue type from acli output."))
+            Result.failure(RuntimeException("Failed to parse ticket details from acli output."))
         }
     }
 

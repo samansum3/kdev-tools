@@ -74,9 +74,10 @@ object CreatePrService {
         var ticketKey = branch.replace(TRAILING_NUMBER_SUFFIX_RE, "")
         if (!CANONICAL_KEY_RE.matches(ticketKey)) ticketKey = branch
 
-        // ── Jira summary ─────────────────────────────────────────────────
-        val summary =
-            JiraService.fetchTicketSummary(ticketKey).getOrElse { return Result.failure(it) }
+        // ── Jira ticket details (summary + issue type, one request) ──────
+        val ticketDetails =
+            JiraService.fetchTicketDetails(ticketKey).getOrElse { return Result.failure(it) }
+        val summary = ticketDetails.summary
 
         // ── Parent branch / parent PR ───────────────────────────────────
         val parentPrRef = detectParentPrRef(workDir, branch)
@@ -114,7 +115,7 @@ object CreatePrService {
         if (draft) ghArgs += "--draft"
         if (!baseBranch.isNullOrBlank()) ghArgs += listOf("--base", baseBranch)
 
-        val prTags = computePrTags(workDir, branch, ticketKey, parentPrRef)
+        val prTags = computePrTags(workDir, branch, ticketDetails.issueType, parentPrRef)
         if (prTags.isNotEmpty()) ghArgs += listOf("--label", prTags.joinToString(","))
 
         val defaultReviewers = DevConfig.load(cwDir).git.default_reviewers
@@ -316,7 +317,6 @@ object CreatePrService {
         return diffResult.stdout.lines().map { it.trim() }.filter { it.isNotBlank() }
     }
 
-    /** Maps changed file extensions to PR tags: BE for Java, FE for TS/JS, UI for Vue/CSS/SCSS. */
     private fun tagsFromChangedFiles(files: List<String>): List<String> {
         fun hasExt(vararg exts: String) = files.any { f -> exts.any { f.endsWith(".$it") } }
         val tags = mutableListOf<String>()
@@ -326,21 +326,14 @@ object CreatePrService {
         return tags
     }
 
-    /**
-     * Full set of PR tags for this PR: file-based tags from the branch's own changed files, a
-     * "Bug" tag if the main ticket's Jira issue type is Bug/Defect, and "Dependent" if this PR
-     * is stacked on another open PR. Filtered down to labels that already exist in the repo,
-     * since `gh pr create --label` fails outright on any name that doesn't — any tag whose label
-     * isn't there yet is silently skipped rather than blocking PR creation.
-     */
     private fun computePrTags(
         workDir: File,
         branch: String,
-        ticketKey: String,
+        mainTicketIssueType: String?,
         parentPrRef: String?
     ): List<String> {
         val fileTags = tagsFromChangedFiles(collectChangedFiles(workDir, branch))
-        val bugTag = JiraService.fetchTicketType(ticketKey).getOrNull()
+        val bugTag = mainTicketIssueType
             ?.takeIf {
                 it.equals("Bug", ignoreCase = true) || it.equals("Defect", ignoreCase = true)
             }
