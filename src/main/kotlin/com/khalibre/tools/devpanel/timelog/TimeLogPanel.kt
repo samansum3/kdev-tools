@@ -67,11 +67,14 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     private var reloadSpinTimer: Timer? = null
     private val reloadSpinIcons = listOf(
-        AllIcons.Actions.Refresh,
         AllIcons.Process.Step_1,
         AllIcons.Process.Step_2,
         AllIcons.Process.Step_3,
-        AllIcons.Process.Step_4
+        AllIcons.Process.Step_4,
+        AllIcons.Process.Step_5,
+        AllIcons.Process.Step_6,
+        AllIcons.Process.Step_7,
+        AllIcons.Process.Step_8,
     )
 
     private fun setReloadSpinning(spinning: Boolean) {
