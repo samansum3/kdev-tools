@@ -12,6 +12,8 @@ import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.tickets.JiraUserComboService
 import com.khalibre.tools.devpanel.tickets.JiraUserService
 import java.awt.*
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -404,7 +406,110 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         card.add(top)
         card.add(summary)
-        return card
+
+        // X button — same close/close-hovered icon pair as the Time code search field's clear
+        // extension — shown only while hovering the card, positioned over its top-right corner.
+        val closeButton = JLabel(AllIcons.Actions.Close).apply {
+            isVisible = false
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = "Remove time log"
+            addMouseListener(object : MouseAdapter() {
+                // The button overlaps the card's top-right corner, so moving onto it fires the
+                // card's own mouseExited (which would otherwise hide this button out from under
+                // the cursor) immediately followed by this mouseEntered — re-asserting visibility
+                // here corrects that within the same event tick, before anything repaints.
+                override fun mouseEntered(e: MouseEvent) {
+                    icon = AllIcons.Actions.CloseHovered
+                    isVisible = true
+                }
+
+                override fun mouseExited(e: MouseEvent) {
+                    icon = AllIcons.Actions.Close
+                    isVisible = false
+                }
+
+                override fun mouseClicked(e: MouseEvent) {
+                    if (!isEnabled) return
+                    isEnabled = false
+                    removeEntry(entry) { success ->
+                        if (!success) isEnabled = true
+                    }
+                }
+            })
+        }
+
+        // JLayeredPane lets the close button float on top of the card at a fixed corner without
+        // disturbing the card's own BoxLayout content — doLayout() re-pins it on every resize.
+        val overlay = object : JLayeredPane() {
+            override fun getPreferredSize(): Dimension = card.preferredSize
+            override fun getMaximumSize(): Dimension =
+                Dimension(Int.MAX_VALUE, card.preferredSize.height)
+
+            override fun getMinimumSize(): Dimension = card.minimumSize
+            override fun doLayout() {
+                card.setBounds(0, 0, width, height)
+                val d = closeButton.preferredSize
+                closeButton.setBounds(width - d.width - 4, 2, d.width, d.height)
+            }
+        }.apply {
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(card, JLayeredPane.DEFAULT_LAYER as Any)
+            add(closeButton, JLayeredPane.PALETTE_LAYER as Any)
+        }
+
+        // Hover-to-reveal needs to fire for the whole card area, not just gaps between its child
+        // labels — mouseEntered/Exited only reach whichever component is directly under the
+        // cursor, so the same listener is attached to the card and every descendant.
+        val hoverListener = object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                closeButton.isVisible = true
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                closeButton.isVisible = false
+            }
+        }
+
+        fun attachHover(c: Component) {
+            c.addMouseListener(hoverListener)
+            if (c is Container) c.components.forEach { attachHover(it) }
+        }
+        attachHover(card)
+
+        return overlay
+    }
+
+    /** Deletes [entry]'s worklog in Jira, then removes it from the day column on success.
+     *  [onDone] reports whether it succeeded so the caller can re-enable its close button on
+     *  failure (rather than leaving it stuck disabled). */
+    private fun removeEntry(entry: WorklogEntry, onDone: (Boolean) -> Unit) {
+        if (entry.id.isBlank()) {
+            statusLabel.text = "✘ Can't remove yet — still syncing with Jira, try again shortly"
+            onDone(false)
+            return
+        }
+        val dir = cwDir
+        val accountId = selectedAccountId
+        val week = weekStart
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = TimeLogService.deleteWorklog(entry.issueKey, entry.id, dir)
+            SwingUtilities.invokeLater {
+                result.onSuccess {
+                    val updated = (currentEntries ?: emptyList()).filterNot { it == entry }
+                    currentEntries = updated
+                    renderGrid(updated)
+                    if (dir != null && accountId != null) {
+                        ApplicationManager.getApplication().executeOnPooledThread {
+                            TimeLogService.cacheWeek(dir, accountId, week, updated)
+                        }
+                    }
+                    onDone(true)
+                }.onFailure {
+                    statusLabel.text = "✘ ${it.message}"
+                    onDone(false)
+                }
+            }
+        }
     }
 
     private fun escapeHtml(s: String) =
