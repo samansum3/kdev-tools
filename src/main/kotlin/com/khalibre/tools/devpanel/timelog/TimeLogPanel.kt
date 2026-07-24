@@ -3,6 +3,7 @@ package com.khalibre.tools.devpanel.timelog
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.MessageType
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -278,6 +279,39 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    /** Reconciles the optimistic entry [addEntryOptimistically] rendered immediately against the
+     *  actual result of the background `addWorklog` call:
+     *   - success: patches the real Jira worklog id into that entry (so its remove button starts
+     *     working) and triggers a normal [reload] to converge on Jira's true state.
+     *   - failure: shows an error balloon anchored on [anchor], and once it fades/dismisses,
+     *     drops the optimistic entry that never actually made it into Jira.
+     */
+    private fun handleAddResult(
+        optimisticEntry: WorklogEntry,
+        result: Result<String>,
+        anchor: Component
+    ) {
+        result.onSuccess { worklogId ->
+            val updated = (currentEntries ?: emptyList()).map {
+                if (it === optimisticEntry) it.copy(id = worklogId) else it
+            }
+            currentEntries = updated
+            renderGrid(updated)
+        }.onFailure { error ->
+            CardUtils.showResultBalloon(
+                "✘ Failed to add time: ${error.message}",
+                anchor,
+                MessageType.ERROR,
+                onClosed = {
+                    val updated =
+                        (currentEntries ?: emptyList()).filterNot { it === optimisticEntry }
+                    currentEntries = updated
+                    renderGrid(updated)
+                }
+            )
+        }
+    }
+
     private fun buildLoadingGrid() {
         daysGrid.removeAll()
         for (i in 0 until 5) {
@@ -350,11 +384,16 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                     add(Box.createVerticalStrut(6))
                 }
             }
-            add(CardUtils.makeActionButton("+ Add time") {
-                AddTimeDialog(project, date) { entry ->
-                    addEntryOptimistically(entry)
-                }.show()
-            }.apply { alignmentX = Component.LEFT_ALIGNMENT })
+            lateinit var addTimeButton: JButton
+            addTimeButton = CardUtils.makeActionButton("+ Add time") {
+                AddTimeDialog(
+                    project,
+                    date,
+                    onLogged = { entry -> addEntryOptimistically(entry) },
+                    onResult = { entry, result -> handleAddResult(entry, result, addTimeButton) }
+                ).show()
+            }
+            add(addTimeButton.apply { alignmentX = Component.LEFT_ALIGNMENT })
             add(Box.createVerticalGlue())
         }
 
@@ -406,7 +445,8 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         card.add(top)
         card.add(summary)
 
-        val closeButton = JLabel(AllIcons.Actions.CloseHovered).apply {
+        val closeButton = JLabel(AllIcons.Actions.CloseHovered)
+        closeButton.apply {
             isVisible = false
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             toolTipText = "Remove time log"
@@ -420,11 +460,7 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
 
                 override fun mouseClicked(e: MouseEvent) {
-                    if (!isEnabled) return
-                    isEnabled = false
-                    removeEntry(entry) { success ->
-                        if (!success) isEnabled = true
-                    }
+                    removeEntry(entry, closeButton)
                 }
             })
         }
@@ -470,34 +506,41 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         return overlay
     }
 
-    /** Deletes [entry]'s worklog in Jira, then removes it from the day column on success.
-     *  [onDone] reports whether it succeeded so the caller can re-enable its close button on
-     *  failure (rather than leaving it stuck disabled). */
-    private fun removeEntry(entry: WorklogEntry, onDone: (Boolean) -> Unit) {
+    private fun removeEntry(entry: WorklogEntry, anchor: Component) {
         if (entry.id.isBlank()) {
-            statusLabel.text = "✘ Can't remove yet — still syncing with Jira, try again shortly"
-            onDone(false)
+            CardUtils.showResultBalloon(
+                "✘ Can't remove yet — still syncing with Jira, try again shortly",
+                anchor,
+                MessageType.ERROR
+            )
             return
         }
         val dir = cwDir
         val accountId = selectedAccountId
         val week = weekStart
+
+        val withoutEntry = (currentEntries ?: emptyList()).filterNot { it == entry }
+        currentEntries = withoutEntry
+        renderGrid(withoutEntry)
+
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = TimeLogService.deleteWorklog(entry.issueKey, entry.id, dir)
             SwingUtilities.invokeLater {
                 result.onSuccess {
-                    val updated = (currentEntries ?: emptyList()).filterNot { it == entry }
-                    currentEntries = updated
-                    renderGrid(updated)
                     if (dir != null && accountId != null) {
                         ApplicationManager.getApplication().executeOnPooledThread {
-                            TimeLogService.cacheWeek(dir, accountId, week, updated)
+                            TimeLogService.cacheWeek(dir, accountId, week, withoutEntry)
                         }
                     }
-                    onDone(true)
                 }.onFailure {
-                    statusLabel.text = "✘ ${it.message}"
-                    onDone(false)
+                    val restored = (currentEntries ?: emptyList()) + entry
+                    currentEntries = restored
+                    renderGrid(restored)
+                    CardUtils.showResultBalloon(
+                        "✘ Failed to remove: ${it.message}",
+                        anchor,
+                        MessageType.ERROR
+                    )
                 }
             }
         }

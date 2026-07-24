@@ -42,7 +42,8 @@ private val DATE_OPTION_FORMAT: DateTimeFormatter =
 class AddTimeDialog(
     private val project: Project,
     private val defaultDate: LocalDate,
-    private val onLogged: (WorklogEntry) -> Unit
+    private val onLogged: (WorklogEntry) -> Unit,
+    private val onResult: (WorklogEntry, Result<String>) -> Unit
 ) : DialogWrapper(project, true) {
 
     private val cwDir = ProjectPaths.cwDir(project)
@@ -61,8 +62,6 @@ class AddTimeDialog(
     }
 
     private val descriptionArea = JBTextArea(4, 30).apply { lineWrap = true; wrapStyleWord = true }
-
-    private var busy = false
 
     init {
         title = "Add time"
@@ -146,7 +145,7 @@ class AddTimeDialog(
     }
 
     private fun updateOkEnabled() {
-        isOKActionEnabled = !busy && issuePicker.selectedTicket() != null
+        isOKActionEnabled = issuePicker.selectedTicket() != null
     }
 
     override fun doValidate(): ValidationInfo? {
@@ -167,41 +166,18 @@ class AddTimeDialog(
         val date = dateCombo.selectedItem as LocalDate
         val description = descriptionArea.text.trim()
 
-        setBusy(true)
+        super.doOKAction()
+        val optimisticEntry =
+            WorklogEntry(ticket.key, "", ticket.summary, date, timeSpent, description)
+        onLogged(optimisticEntry)
+
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = TimeLogService.addWorklog(ticket.key, timeSpent, date, description, cwDir)
             result.onSuccess {
                 TimeLogService.rememberLastTicketKey(cwDir, ticket.key)
                 TimeLogService.rememberLastDuration(cwDir, timeSpent)
             }
-            SwingUtilities.invokeLater {
-                setBusy(false)
-                result.onSuccess { worklogId ->
-                    onLogged(
-                        WorklogEntry(
-                            ticket.key,
-                            worklogId,
-                            ticket.summary,
-                            date,
-                            timeSpent,
-                            description
-                        )
-                    )
-                    super@AddTimeDialog.doOKAction()
-                }.onFailure {
-                    setErrorText(it.message ?: "Failed to add time")
-                }
-            }
+            SwingUtilities.invokeLater { onResult(optimisticEntry, result) }
         }
-    }
-
-    private fun setBusy(value: Boolean) {
-        busy = value
-        updateOkEnabled()
-        issuePicker.isEnabled = !busy
-        timeCombo.isEnabled = !busy
-        dateCombo.isEnabled = !busy
-        descriptionArea.isEnabled = !busy
-        okAction.putValue(Action.NAME, if (busy) "Adding…" else "Add")
     }
 }
