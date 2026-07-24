@@ -353,7 +353,6 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(CardUtils.makeActionButton("+ Add time") {
                 AddTimeDialog(project, date) { entry ->
                     addEntryOptimistically(entry)
-                    reload()
                 }.show()
             }.apply { alignmentX = Component.LEFT_ALIGNMENT })
             add(Box.createVerticalGlue())
