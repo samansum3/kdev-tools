@@ -176,8 +176,17 @@ class AddTimeDialog(
             }
             SwingUtilities.invokeLater {
                 setBusy(false)
-                result.onSuccess {
-                    onLogged(WorklogEntry(ticket.key, ticket.summary, date, timeSpent, description))
+                result.onSuccess { worklogId ->
+                    onLogged(
+                        WorklogEntry(
+                            ticket.key,
+                            worklogId,
+                            ticket.summary,
+                            date,
+                            timeSpent,
+                            description
+                        )
+                    )
                     super@AddTimeDialog.doOKAction()
                 }.onFailure {
                     setErrorText(it.message ?: "Failed to add time")

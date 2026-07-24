@@ -17,9 +17,12 @@ import java.time.format.DateTimeFormatter
 /** A single time-loggable ticket from the configured Time project, e.g. TIME-31. */
 data class TimeTicketInfo(val key: String, val summary: String)
 
-/** One worklog entry as shown in the weekly table, already resolved to the issue it belongs to. */
+/** One worklog entry as shown in the weekly table, already resolved to the issue it belongs to.
+ *  [id] is the Jira worklog id (needed to target this specific entry for deletion) — blank for
+ *  entries not yet round-tripped through Jira (see [TimeLogService.addWorklog]). */
 data class WorklogEntry(
     val issueKey: String,
+    val id: String,
     val issueSummary: String,
     val date: LocalDate,
     val timeSpent: String,
@@ -99,6 +102,7 @@ object TimeLogService {
 
     private data class CachedWorklogEntry(
         val issueKey: String,
+        val id: String,
         val issueSummary: String,
         val date: String, // ISO-8601, e.g. "2026-07-20"
         val timeSpent: String,
@@ -125,6 +129,7 @@ object TimeLogService {
             cached.map {
                 WorklogEntry(
                     it.issueKey,
+                    it.id,
                     it.issueSummary,
                     LocalDate.parse(it.date),
                     it.timeSpent,
@@ -148,6 +153,7 @@ object TimeLogService {
             val cached = entries.map {
                 CachedWorklogEntry(
                     it.issueKey,
+                    it.id,
                     it.issueSummary,
                     it.date.toString(),
                     it.timeSpent,
@@ -231,7 +237,7 @@ object TimeLogService {
         date: LocalDate,
         description: String,
         cwDir: File?
-    ): Result<Unit> {
+    ): Result<String> {
         val cfg = DevConfig.load(cwDir)
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
@@ -277,8 +283,15 @@ object TimeLogService {
             conn.outputStream.use { it.write(gson.toJson(payload).toByteArray()) }
 
             val code = conn.responseCode
-            if (code in 200..201) Result.success(Unit)
-            else {
+            if (code in 200..201) {
+                val body = conn.inputStream.bufferedReader().readText()
+                val id = try {
+                    JsonParser.parseString(body).asJsonObject.get("id")?.asString
+                } catch (_: Exception) {
+                    null
+                }
+                Result.success(id ?: "")
+            } else {
                 val err = try {
                     (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.readText()
                 } catch (_: Exception) {
@@ -288,6 +301,39 @@ object TimeLogService {
             }
         } catch (e: Exception) {
             Result.failure(RuntimeException("Add time failed: ${e.message}"))
+        }
+    }
+
+    // ── Delete a worklog ─────────────────────────────────────────────────────────
+
+    /** Removes worklog [worklogId] from [issueKey] in Jira. */
+    fun deleteWorklog(issueKey: String, worklogId: String, cwDir: File?): Result<Unit> {
+        val cfg = DevConfig.load(cwDir)
+        val baseUrl = cfg.jira.base_url.trimEnd('/')
+        if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
+        if (worklogId.isBlank()) return Result.failure(RuntimeException("Missing worklog id"))
+
+        return try {
+            val conn = java.net.URL("$baseUrl/rest/api/3/issue/$issueKey/worklog/$worklogId")
+                .openConnection() as HttpURLConnection
+            JiraAuth.apply(conn, cwDir)
+            conn.setRequestProperty("Accept", "application/json")
+            conn.requestMethod = "DELETE"
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 15_000
+
+            val code = conn.responseCode
+            if (code in 200..204) Result.success(Unit)
+            else {
+                val err = try {
+                    (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.readText()
+                } catch (_: Exception) {
+                    null
+                }
+                Result.failure(RuntimeException(err?.take(300) ?: "HTTP $code"))
+            }
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("Remove time failed: ${e.message}"))
         }
     }
 
@@ -424,9 +470,10 @@ object TimeLogService {
                     val date = OffsetDateTime.parse(startedStr, startedFormatter).toLocalDate()
                     if (date.isBefore(weekStart) || date.isAfter(weekEnd)) return@mapNotNull null
 
+                    val id = obj.get("id")?.asString ?: ""
                     val timeSpent = obj.get("timeSpent")?.asString ?: "?"
                     val comment = extractCommentText(obj.get("comment"))
-                    WorklogEntry(issueKey, issueSummary, date, timeSpent, comment)
+                    WorklogEntry(issueKey, id, issueSummary, date, timeSpent, comment)
                 } catch (_: Exception) {
                     null
                 }
