@@ -108,6 +108,7 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var displayedWeek: LocalDate? = null
 
     init {
+        com.intellij.ui.ComboboxSpeedSearch.installOn(userCombo) // Search by typing
         val heading = JPanel(BorderLayout()).apply {
             add(buildHeader(), BorderLayout.NORTH)
             add(Box.createVerticalStrut(JBUI.scale(4)), BorderLayout.CENTER)
