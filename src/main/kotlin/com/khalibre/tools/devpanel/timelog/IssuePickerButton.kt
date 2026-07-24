@@ -183,6 +183,9 @@ class IssuePickerButton : JButton("Select ticket…") {
         applyFilter()
 
         popup.showUnderneathOf(this)
-        SwingUtilities.invokeLater { searchField.requestFocusInWindow() }
+        SwingUtilities.invokeLater {
+            searchField.requestFocusInWindow()
+            searchField.selectAll()
+        }
     }
 }
