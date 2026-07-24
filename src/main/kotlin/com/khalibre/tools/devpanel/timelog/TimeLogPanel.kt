@@ -407,24 +407,16 @@ class TimeLogPanel(private val project: Project) : JPanel(BorderLayout()) {
         card.add(top)
         card.add(summary)
 
-        // X button — same close/close-hovered icon pair as the Time code search field's clear
-        // extension — shown only while hovering the card, positioned over its top-right corner.
-        val closeButton = JLabel(AllIcons.Actions.Close).apply {
+        val closeButton = JLabel(AllIcons.Actions.CloseHovered).apply {
             isVisible = false
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             toolTipText = "Remove time log"
             addMouseListener(object : MouseAdapter() {
-                // The button overlaps the card's top-right corner, so moving onto it fires the
-                // card's own mouseExited (which would otherwise hide this button out from under
-                // the cursor) immediately followed by this mouseEntered — re-asserting visibility
-                // here corrects that within the same event tick, before anything repaints.
                 override fun mouseEntered(e: MouseEvent) {
-                    icon = AllIcons.Actions.CloseHovered
                     isVisible = true
                 }
 
                 override fun mouseExited(e: MouseEvent) {
-                    icon = AllIcons.Actions.Close
                     isVisible = false
                 }
 
