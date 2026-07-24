@@ -437,6 +437,19 @@ object PrService {
         return result.stdout.trim().takeIf { it.isNotBlank() && result.exitCode == 0 }
     }
 
+    fun existingRepoLabels(workDir: File): Set<String> {
+        val result =
+            runCmd(listOf("gh", "label", "list", "--json", "name", "--limit", "200"), workDir)
+        if (result.exitCode != 0 || result.stdout.isBlank()) return emptySet()
+        return try {
+            JsonParser.parseString(result.stdout).asJsonArray
+                .mapNotNull { it.asJsonObject.get("name")?.asString }
+                .toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
     fun pushBranch(workDir: File, remote: String, targetBranch: String): Result<String> {
         val result = runCmd(
             listOf(
