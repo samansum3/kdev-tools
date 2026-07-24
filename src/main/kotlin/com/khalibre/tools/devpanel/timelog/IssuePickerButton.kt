@@ -96,17 +96,40 @@ class IssuePickerButton : JButton("Select ticket…") {
         val listModel = DefaultListModel<TimeTicketInfo>()
         items.forEach { listModel.addElement(it) }
 
+        // Tracks the row under the mouse cursor so hovering can highlight it the same way a
+        // native combo box popup does — independent of (and in addition to) keyboard/click
+        // selection, which JList's own isSelected already covers.
+        var hoveredIndex = -1
+
         lateinit var list: JBList<TimeTicketInfo>
         list = JBList(listModel).apply {
             cellRenderer =
-                javax.swing.ListCellRenderer<TimeTicketInfo> { _, value, _, isSelected, _ ->
+                javax.swing.ListCellRenderer<TimeTicketInfo> { _, value, index, isSelected, _ ->
                     javax.swing.JLabel(label(value)).apply {
                         border = JBUI.Borders.empty(4, 8)
                         isOpaque = true
-                        background = if (isSelected) list.selectionBackground else list.background
-                        foreground = if (isSelected) list.selectionForeground else list.foreground
+                        val highlighted = isSelected || index == hoveredIndex
+                        background = if (highlighted) list.selectionBackground else list.background
+                        foreground = if (highlighted) list.selectionForeground else list.foreground
                     }
                 }
+            addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+                override fun mouseMoved(e: java.awt.event.MouseEvent) {
+                    val idx = locationToIndex(e.point)
+                    val bounds = if (idx >= 0) getCellBounds(idx, idx) else null
+                    val newHovered = if (bounds != null && bounds.contains(e.point)) idx else -1
+                    if (newHovered != hoveredIndex) {
+                        hoveredIndex = newHovered
+                        repaint()
+                    }
+                }
+            })
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseExited(e: java.awt.event.MouseEvent) {
+                    hoveredIndex = -1
+                    repaint()
+                }
+            })
         }
 
         val searchField = ExtendableTextField().apply {
