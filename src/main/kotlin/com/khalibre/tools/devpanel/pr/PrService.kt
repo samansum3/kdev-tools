@@ -101,35 +101,47 @@ object PrService {
         val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
         val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
         val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
-        val parentBranch = getParentBranch(workDir, target)
-        val rebaseBaseBranch = parentBranch ?: onto
 
         val log = StringBuilder()
 
-        if (currentBranch == target) {
-            log.appendLine("Already on $target.")
+        if (currentBranch != target) {
+            log.appendLine("Checking out $target...")
+            val checkout = runCmd(listOf("git", "checkout", target), workDir)
+            if (checkout.exitCode != 0)
+                return Result.failure(
+                    RuntimeException(
+                        checkout.stderr.ifBlank { checkout.stdout }
+                            .ifBlank { "Failed to checkout $target" }
+                            .take(300)
+                    )
+                )
         } else {
-            log.appendLine("Rebasing $target while staying on $currentBranch.")
+            log.appendLine("Already on $target.")
         }
 
+        log.appendLine("Fetching latest branches...")
+        val fetchAll = runCmd(listOf("git", "fetch", "--all", "--prune"), workDir)
+        if (fetchAll.exitCode != 0) {
+            log.appendLine(
+                "Warning: fetch --all failed (${
+                    fetchAll.stderr.ifBlank { fetchAll.stdout }.take(200)
+                }); parent detection may be based on stale refs."
+            )
+        }
+
+        val parentBranch = CreatePrService.detectParentBranchName(workDir, target, logRef = target)
+        val rebaseBaseBranch = parentBranch ?: onto
         val baseRemote = getRemote(rebaseBaseBranch)
 
-        log.appendLine("Fetching $baseRemote/$rebaseBaseBranch...")
-        val fetch = runCmd(
-            listOf("git", "fetch", baseRemote, rebaseBaseBranch),
-            workDir
-        )
-        if (fetch.exitCode != 0)
-            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $baseRemote/$rebaseBaseBranch" }
-                .take(300)))
-
-        log.appendLine("Rebasing $target onto $baseRemote/$rebaseBaseBranch...")
-        val rebaseCmd = if (currentBranch == target) {
-            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch")
+        if (parentBranch != null) {
+            log.appendLine("Found parent branch: $parentBranch")
         } else {
-            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch", target)
+            log.appendLine("No open parent branch found — using base branch $onto")
         }
-        val pull = runCmd(rebaseCmd, workDir)
+
+        // ── Rebase ───────────────────────────────────────────────────────────
+        log.appendLine("Rebasing $target onto $baseRemote/$rebaseBaseBranch...")
+        val pull = runCmd(listOf("git", "pull", "--rebase", baseRemote, rebaseBaseBranch), workDir)
         if (pull.exitCode != 0)
             return Result.failure(
                 RuntimeException(
@@ -145,9 +157,7 @@ object PrService {
             pushBranch(workDir, targetRemote, target)
         }
 
-        // `git rebase <upstream> <branch>` implicitly checks out <branch> as a side effect
-        // (per git's own docs). When the caller started on a different branch, switch back so
-        // they land where they started rather than on the branch that just got rebased/pushed.
+        // Restore original branch if we switched to check out target above.
         if (currentBranch != target) {
             val restore = runCmd(listOf("git", "checkout", currentBranch), workDir)
             if (restore.exitCode == 0) {
@@ -467,32 +477,6 @@ object PrService {
                 result.stderr.ifBlank { result.stdout }.ifBlank { "git push failed" }.take(300)
             )
         )
-    }
-
-    private fun getParentBranch(
-        workDir: File,
-        branchName: String
-    ): String? {
-        val parentPr = CreatePrService.detectParentPrRef(workDir, branchName, logRef = branchName)
-            ?.removePrefix("#")
-            ?: return null
-
-        val result = runCmd(
-            listOf(
-                "gh",
-                "pr",
-                "view",
-                parentPr,
-                "--json",
-                "headRefName",
-                "--jq",
-                ".headRefName"
-            ),
-            workDir
-        )
-
-        return result.stdout.trim()
-            .takeIf { result.exitCode == 0 && it.isNotBlank() }
     }
 
     internal fun getRemote(branchName: String): String {

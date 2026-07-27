@@ -207,20 +207,22 @@ object CreatePrService {
 
     /**
      * Walks [logRef]'s own `--first-parent` history (excluding its own tip commit) one commit at
-     * a time, same boundary rules as [collectExtraTicketKeys]:
+     * a time, looking for the nearest real stacking boundary:
      *
      *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? If it has an open PR,
-     *    that's the parent to report. If it doesn't (a stale/never-opened branch ref), keep
-     *    walking past it and check the next branch tip encountered.
+     *    that's the parent branch — return its name. If it doesn't (a stale/never-opened branch
+     *    ref), keep walking past it and check the next branch tip encountered.
      *  - Hits the tip of any other branch (e.g. "dev-wf-s9", a base/integration branch) — stop
      *    immediately with no parent: this branch isn't stacked on anything, it's just based
      *    directly on the base branch.
      *
      * [logRef] should be the branch actually being inspected — not necessarily `HEAD`, since the
      * caller (e.g. rebasing a branch other than the one currently checked out) may be inspecting
-     * a branch that isn't checked out at all.
+     * a branch that isn't checked out at all. Relies entirely on local git state (commit ancestry
+     * + local/remote-tracking refs) plus one `gh` call to check PR existence — nothing is read
+     * from any PR's body/description.
      */
-    internal fun detectParentPrRef(
+    internal fun detectParentBranchName(
         workDir: File,
         currentBranch: String,
         logRef: String = "HEAD"
@@ -239,12 +241,23 @@ object CreatePrService {
             val namesHere = tipMap[hash] ?: continue
             for (name in namesHere) {
                 if (!TICKET_KEY_RE.matches(name)) return null // base/integration branch — no parent.
-                val num = getOpenPrNumber(workDir, name)
-                if (num != null) return "#$num" // stacked on a real, already-open PR.
+                if (hasOpenPr(workDir, name)) return name // stacked on a real, already-open PR.
                 // No PR yet: not a real boundary — keep walking past it.
             }
         }
         return null
+    }
+
+    /** Same walk as [detectParentBranchName], but returns the parent's PR number (for building
+     *  the "### DEPEND ON #N" line) instead of the branch name. */
+    internal fun detectParentPrRef(
+        workDir: File,
+        currentBranch: String,
+        logRef: String = "HEAD"
+    ): String? {
+        val branchName = detectParentBranchName(workDir, currentBranch, logRef) ?: return null
+        val num = getOpenPrNumber(workDir, branchName) ?: return null
+        return "#$num"
     }
 
     /**
