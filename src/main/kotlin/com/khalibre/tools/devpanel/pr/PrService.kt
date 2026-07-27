@@ -235,6 +235,17 @@ object PrService {
                         .dropWhile { it.isBlank() }   // matches script's `sed '/./,$!d'`
                         .joinToString("\n")
                     log.appendLine("✔ Dependency removed")
+
+                    val removeLabel = removeDependentLabel(prNumber, workDir)
+                    if (removeLabel.exitCode == 0) {
+                        log.appendLine("✔ Removed Dependent label")
+                    } else {
+                        log.appendLine(
+                            "Note: couldn't remove Dependent label (${
+                                removeLabel.stderr.ifBlank { removeLabel.stdout }.take(200)
+                            })"
+                        )
+                    }
                 } else {
                     log.appendLine("Dependency still active ($state)")
                 }
@@ -249,11 +260,30 @@ object PrService {
             if (parentPrRef != null) {
                 newBody = "### DEPEND ON $parentPrRef\n${newBody.trimStart('\n')}"
                 log.appendLine("✔ Added dependency $parentPrRef")
+
+                if ("Dependent" in existingRepoLabels(workDir)) {
+                    val addLabel =
+                        runCmd(
+                            listOf("gh", "pr", "edit", "$prNumber", "--add-label", "Dependent"),
+                            workDir
+                        )
+                    if (addLabel.exitCode == 0) {
+                        log.appendLine("✔ Added Dependent label")
+                    } else {
+                        log.appendLine(
+                            "Note: couldn't add Dependent label (${
+                                addLabel.stderr.ifBlank { addLabel.stdout }.take(200)
+                            })"
+                        )
+                    }
+                }
             } else {
                 log.appendLine("No parent PR found")
+                removeDependentLabel(prNumber, workDir)
             }
         } else {
             log.appendLine("No dependency found")
+            removeDependentLabel(prNumber, workDir)
         }
 
         // ── 2. Clipboard image handling (single source of truth) ──────────────
@@ -325,6 +355,20 @@ object PrService {
             Result.failure(RuntimeException("Update failed: ${e.message}"))
         }
     }
+
+    private fun removeDependentLabel(
+        prNumber: Int,
+        workDir: File
+    ): CmdResult = runCmd(
+        listOf(
+            "gh",
+            "pr",
+            "edit",
+            "$prNumber",
+            "--remove-label",
+            "Dependent"
+        ), workDir
+    )
 
     fun checkoutBranch(project: Project, branch: String): Result<String> {
         val workDir = project.basePath?.let { File(it) }
