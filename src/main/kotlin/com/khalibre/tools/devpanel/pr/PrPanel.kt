@@ -671,20 +671,26 @@ class PrPanel(
                         toolTipText = "Checkout this PR branch"
                     }
                 add(checkoutBtn)
-                val rebaseButton = makeActionButton("Rebase") {}.apply {
-                    toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
+
+                if (!closedFilter) {
+                    val rebaseButton = makeActionButton("Rebase") {}.apply {
+                        toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
+                    }
+                    rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
+                    add(rebaseButton)
+
+                    val updatePrButton = makeActionButton("Update PR") { }.apply {
+                        toolTipText =
+                            "Update PR description, remove dependency text, add image, etc."
+                    }
+                    updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
+                    add(updatePrButton)
                 }
-                rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
-                add(rebaseButton)
-                val updatePrButton = makeActionButton("Update PR") { }.apply {
-                    toolTipText = "Update PR description, remove dependency text, add image, etc."
-                }
-                updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
-                add(updatePrButton)
-            } else {
+            } else if (!closedFilter) {
                 lateinit var approveBtn: JButton
                 approveBtn = makeActionButton("Approve") { doApprovePr(pr, repo, approveBtn) }
                 add(approveBtn)
+
                 if (hasMergePermission) {
                     lateinit var approveMergeBtn: JButton
                     approveMergeBtn =
@@ -701,7 +707,7 @@ class PrPanel(
                 }
             }
 
-            if (hasMergePermission) {
+            if (hasMergePermission && !closedFilter) {
                 lateinit var mergeBtn: JButton
                 mergeBtn =
                     makeActionButton("Merge") { doMergePr(pr, repo, false, mergeBtn) }.apply {
