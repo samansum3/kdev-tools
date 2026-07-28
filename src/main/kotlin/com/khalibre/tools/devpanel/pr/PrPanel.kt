@@ -539,7 +539,11 @@ class PrPanel(
 
     private fun buildSummaryText(branch: String?, total: Int, awaiting: Int): String {
         val branchPart = if (branch != null) " → $branch" else ""
-        return "Open PRs$branchPart: $total  ·  awaiting review: $awaiting"
+        return if (closedFilter) {
+            "Closed PRs$branchPart: $total"
+        } else {
+            "Open PRs$branchPart: $total  ·  awaiting review: $awaiting"
+        }
     }
 
     private fun buildPrCard(pr: PullRequest, repo: String, hasMergePermission: Boolean): JPanel {
