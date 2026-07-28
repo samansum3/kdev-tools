@@ -393,7 +393,12 @@ object PrService {
     }
 
     /** Fetch open PRs (non-draft) for an optional base branch */
-    fun fetchPrs(repo: String, baseBranch: String?, author: String?): List<PullRequest> {
+    fun fetchPrs(
+        repo: String,
+        baseBranch: String?,
+        author: String?,
+        closed: Boolean = false
+    ): List<PullRequest> {
         val args = mutableListOf(
             "gh",
             "pr",
@@ -401,7 +406,7 @@ object PrService {
             "--repo",
             repo,
             "--state",
-            "open",
+            if (closed) "closed" else "open",
             "--json",
             "number,title,author,labels,updatedAt,reviewDecision,url,headRefName,baseRefName,isDraft,reviews",
             "--limit",
