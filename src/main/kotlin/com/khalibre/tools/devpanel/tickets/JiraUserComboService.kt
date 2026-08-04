@@ -34,12 +34,14 @@ class JiraUserComboService(
 
     fun createJiraUserCombo(): JComboBox<JiraUser?> {
         val combo = buildJiraUserCombo()
-        SwingUtilities.invokeLater {
-            val (curFirst, rest) = jiraUsers.partition { it.accountId == currentUserAccountId }
-            val ordered = curFirst + rest
-            val model = DefaultComboBoxModel<JiraUser>()
-            ordered.forEach { model.addElement(it) }
-            combo.model = model
+        ApplicationManager.getApplication().executeOnPooledThread {
+            SwingUtilities.invokeLater {
+                val (curFirst, rest) = jiraUsers.partition { it.accountId == currentUserAccountId }
+                val ordered = curFirst + rest
+                val model = DefaultComboBoxModel<JiraUser>()
+                ordered.forEach { model.addElement(it) }
+                combo.model = model
+            }
         }
         return combo
     }
