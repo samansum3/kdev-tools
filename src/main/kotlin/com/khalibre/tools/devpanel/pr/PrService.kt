@@ -33,7 +33,11 @@ data class PullRequest(
     val url: String,
     var mergeable: MergeableState = MergeableState.UNKNOWN,
     var isOutdated: Boolean = false,
-    var isBlocked: Boolean = false
+    var isBlocked: Boolean = false,
+    // Review threads that are outdated, unresolved, and started by the current user — populated
+    // alongside mergeable/isOutdated/isBlocked in PrPanel.refresh(). Drives the "Resolve
+    // comments" button: shown iff non-empty.
+    var resolvableThreadIds: List<String> = emptyList()
 ) {
     val approvedBy: List<String>
         get() {
@@ -469,6 +473,144 @@ object PrService {
 
         latch.await(30, TimeUnit.SECONDS)
         return results
+    }
+
+    /** One PR review thread's state, as much as [fetchResolvableThreadIds] needs. [startedBy] is
+     *  the author of the thread's first comment — i.e. whose conversation this is. */
+    private data class ReviewThread(
+        val id: String,
+        val isResolved: Boolean,
+        val isOutdated: Boolean,
+        val startedBy: String?
+    )
+
+    /**
+     * Review threads on a single PR, via GraphQL — `gh pr view`'s REST-backed `--json` fields
+     * don't expose `isResolved`/`isOutdated` at the thread level, only the older-style flat
+     * review comments, so this goes straight to the GraphQL API.
+     */
+    private fun fetchReviewThreads(owner: String, name: String, prNumber: Int): List<ReviewThread> {
+        val query = """
+            query(${'$'}owner: String!, ${'$'}name: String!, ${'$'}number: Int!) {
+              repository(owner: ${'$'}owner, name: ${'$'}name) {
+                pullRequest(number: ${'$'}number) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      id
+                      isResolved
+                      isOutdated
+                      comments(first: 1) {
+                        nodes { author { login } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val result = runCmd(
+            listOf(
+                "gh", "api", "graphql",
+                "-f", "query=$query",
+                "-F", "owner=$owner",
+                "-F", "name=$name",
+                "-F", "number=$prNumber"
+            )
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank()) return emptyList()
+
+        return try {
+            val nodes = JsonParser.parseString(result.stdout).asJsonObject
+                .getAsJsonObject("data")
+                .getAsJsonObject("repository")
+                .getAsJsonObject("pullRequest")
+                .getAsJsonObject("reviewThreads")
+                .getAsJsonArray("nodes")
+            nodes.mapNotNull { n ->
+                val obj = n.asJsonObject
+                val id = obj.get("id")?.asString ?: return@mapNotNull null
+                val isResolved = obj.get("isResolved")?.asBoolean ?: false
+                val isOutdated = obj.get("isOutdated")?.asBoolean ?: false
+                val startedBy = obj.getAsJsonObject("comments")
+                    ?.getAsJsonArray("nodes")
+                    ?.firstOrNull()?.asJsonObject
+                    ?.getAsJsonObject("author")?.get("login")?.asString
+                ReviewThread(id, isResolved, isOutdated, startedBy)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * For each PR in [numbers], the ids of review threads that are outdated, unresolved, and
+     * were started by [currentUser] — the set the "Resolve comments" button offers to clear.
+     * Fetched in parallel per PR, same pattern as [fetchMergeableStates].
+     */
+    fun fetchResolvableThreadIds(
+        repo: String,
+        numbers: List<Int>,
+        currentUser: String
+    ): Map<Int, List<String>> {
+        if (numbers.isEmpty() || currentUser.isBlank()) return emptyMap()
+        val parts = repo.split("/", limit = 2)
+        if (parts.size != 2) return emptyMap()
+        val (owner, name) = parts
+
+        val results = ConcurrentHashMap<Int, List<String>>()
+        val latch = CountDownLatch(numbers.size)
+        numbers.forEach { num ->
+            Thread {
+                try {
+                    val threads = fetchReviewThreads(owner, name, num)
+                    results[num] = threads
+                        .filter { !it.isResolved && it.isOutdated && it.startedBy == currentUser }
+                        .map { it.id }
+                } catch (e: Exception) {
+                    results[num] = emptyList()
+                } finally {
+                    latch.countDown()
+                }
+            }.start()
+        }
+        latch.await(30, TimeUnit.SECONDS)
+        return results
+    }
+
+    /** Resolves each of [threadIds] via the `resolveReviewThread` GraphQL mutation, returning how
+     *  many succeeded. Partial failures don't fail the whole call — only reported as a failure if
+     *  every single one errored out (e.g. `gh` itself unavailable). */
+    fun resolveReviewThreads(threadIds: List<String>): Result<Int> {
+        if (threadIds.isEmpty()) return Result.success(0)
+        val mutation = """
+            mutation(${'$'}threadId: ID!) {
+              resolveReviewThread(input: {threadId: ${'$'}threadId}) {
+                thread { id isResolved }
+              }
+            }
+        """.trimIndent()
+
+        var resolved = 0
+        var lastError: String? = null
+        threadIds.forEach { id ->
+            val result = runCmd(
+                listOf(
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    "query=$mutation",
+                    "-f",
+                    "threadId=$id"
+                )
+            )
+            if (result.exitCode == 0) resolved++
+            else lastError = result.stderr.ifBlank { result.stdout }.take(200)
+        }
+
+        return if (resolved == 0 && lastError != null) Result.failure(RuntimeException(lastError))
+        else Result.success(resolved)
     }
 
     /** gh pr review <number> --approve */
