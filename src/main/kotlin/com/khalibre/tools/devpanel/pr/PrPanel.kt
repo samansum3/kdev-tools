@@ -512,11 +512,19 @@ class PrPanel(
                     authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
                 val prs = PrService.fetchPrs(repo, selectedBranch, selectedAuthor, closedFilter)
                 val mergeableMap = PrService.fetchMergeableStates(repo, prs.map { it.number })
+                // "Resolve comments" only makes sense on open PRs, and needs to know whose
+                // threads to look for.
+                val resolvableMap = if (!closedFilter && !ghUser.isNullOrBlank()) {
+                    PrService.fetchResolvableThreadIds(repo, prs.map { it.number }, ghUser!!)
+                } else {
+                    emptyMap()
+                }
                 prs.forEach {
                     val info = mergeableMap[it.number]
                     it.mergeable = info?.mergeable ?: MergeableState.UNKNOWN
                     it.isOutdated = info?.isOutdated ?: false
                     it.isBlocked = info?.isBlocked ?: false
+                    it.resolvableThreadIds = resolvableMap[it.number] ?: emptyList()
                 }
                 SwingUtilities.invokeLater {
                     lastLoadedPrs = prs
@@ -719,6 +727,18 @@ class PrPanel(
                     }
                 add(mergeBtn)
             }
+
+            if (!closedFilter && pr.resolvableThreadIds.isNotEmpty()) {
+                lateinit var resolveBtn: JButton
+                resolveBtn =
+                    makeActionButton("💬 Resolve (${pr.resolvableThreadIds.size})") {
+                        doResolveComments(pr, resolveBtn)
+                    }.apply {
+                        toolTipText =
+                            "Resolve your own review comments that are now outdated (${pr.resolvableThreadIds.size})"
+                    }
+                add(resolveBtn)
+            }
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
 
@@ -838,6 +858,34 @@ class PrPanel(
                     stopSpinner()
                     setStatus("✗ ${result.exceptionOrNull()?.message}")
                 }
+            }
+        }
+    }
+
+    private fun doResolveComments(pr: PullRequest, button: JButton) {
+        button.text = "Resolving"
+        val stopSpinner = CardUtils.startButtonSpinner(button)
+        val threadIds = pr.resolvableThreadIds
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = PrService.resolveReviewThreads(threadIds)
+            SwingUtilities.invokeLater {
+                stopSpinner()
+                button.text = "💬 Resolve";
+
+                result.onSuccess { resolvedCount ->
+                    CardUtils.showResultBalloon(
+                        "✓ Resolved $resolvedCount comment${if (resolvedCount == 1) "" else "s"}",
+                        button,
+                        MessageType.INFO
+                    )
+                }.onFailure {
+                    CardUtils.showResultBalloon(
+                        "✗ ${CardUtils.escHtml(it.message ?: "Failed to resolve comments")}",
+                        button,
+                        MessageType.ERROR
+                    )
+                }
+                refresh()
             }
         }
     }
