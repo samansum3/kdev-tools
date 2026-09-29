@@ -1,6 +1,7 @@
 package com.khalibre.tools.devpanel.config
 
 import com.google.gson.Gson
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
@@ -38,6 +39,11 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var ticketsPanelSupplier: (() -> TicketsPanel?)? = null
 
     private val subTabs = JBTabbedPane()
+
+    private companion object {
+        const val HOW_TO_CONFIG_URL = "https://khalibre.atlassian.net/browse/CW-37722?focusedCommentId=103347"
+        const val SOURCE_CODE_URL = "https://github.com/samansum3/kdev-tools"
+    }
 
     private fun cwDir() = ProjectPaths.cwDir(project)
 
@@ -242,13 +248,56 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val bottom = JPanel(BorderLayout()).apply { border = JBUI.Borders.emptyTop(8) }
         val saveBtn = JButton("Save Config").apply { addActionListener { saveConfig() } }
-        bottom.add(saveBtn, BorderLayout.NORTH)
+
+        // Help links sit directly above the Save Config button
+        val linksAndSave = JPanel(BorderLayout(0, JBUI.scale(8)))
+        linksAndSave.add(buildHelpLinks(), BorderLayout.NORTH)
+        linksAndSave.add(saveBtn, BorderLayout.CENTER)
+        bottom.add(linksAndSave, BorderLayout.NORTH)
         bottom.add(
             JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { add(statusLabel) },
             BorderLayout.SOUTH
         )
         outer.add(bottom, BorderLayout.SOUTH)
         return outer
+    }
+
+    // ── Help links ────────────────────────────────────────────────────────────
+
+    private fun buildHelpLinks(): JComponent {
+        fun linkRow(title: String, description: String, url: String): JComponent {
+            val link = ActionLink(title) { BrowserUtil.browse(url) }.apply {
+                toolTipText = url
+            }
+            val desc = JBLabel("<html>$description</html>").apply {
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 1f)
+                setAllowAutoWrapping(true)
+            }
+            return JPanel(BorderLayout(0, JBUI.scale(1))).apply {
+                add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { add(link) }, BorderLayout.NORTH)
+                add(desc, BorderLayout.CENTER)
+            }
+        }
+
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(
+                linkRow(
+                    "How to config",
+                    "This is the original feature definition.",
+                    HOW_TO_CONFIG_URL
+                )
+            )
+            add(Box.createVerticalStrut(JBUI.scale(6)))
+            add(
+                linkRow(
+                    "Source code",
+                    "You can fork it, add new features, or fix bugs if a later IDE version breaks a current plugin feature.",
+                    SOURCE_CODE_URL
+                )
+            )
+        }
     }
 
     // ── Load / Save ───────────────────────────────────────────────────────────
