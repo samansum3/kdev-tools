@@ -14,6 +14,10 @@ data class GitConfig(
 data class JiraConfig(
     val base_url: String = "",
     val project_key: String = "",
+    // Project key used to populate the Time Log tab's "Time code" dropdown — kept separate
+    // from [project_key] since worklogs are typically tracked against a dedicated Jira
+    // project (e.g. "TIME") rather than the main development project.
+    val time_project_key: String = "",
     val email: String = "",
     val api_token: String = ""
 )

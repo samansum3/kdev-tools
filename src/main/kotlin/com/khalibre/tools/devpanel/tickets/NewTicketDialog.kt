@@ -43,7 +43,7 @@ class NewTicketDialog(
     private val summaryField = JBTextField()
 
     // ── TipTap rich-text editor replaces the old JEditorPane ──────────────
-    private val descriptionEditor = TipTapDescriptionEditor()
+    private val descriptionEditor = MarkdownDescriptionEditor()
 
     private var regularTypeInfos: List<JiraMetaService.IssueTypeInfo> = emptyList()
     private var subtaskTypeInfos: List<JiraMetaService.SubtaskTypeInfo> = emptyList()

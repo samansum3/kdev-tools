@@ -1,19 +1,15 @@
 package com.khalibre.tools.devpanel.config
 
 import com.google.gson.Gson
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
 import com.khalibre.tools.devpanel.common.ProjectPaths
 import com.khalibre.tools.devpanel.tickets.TicketsPanel
 import java.awt.*
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import java.io.File
-import javax.swing.JButton
-import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.Timer
+import javax.swing.*
 
 /**
  * Config tab — contains three sub-tabs:
@@ -25,6 +21,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val jiraUrlField = JBTextField()
     private val projectKeyField = JBTextField()
+    private val timeProjectKeyField = JBTextField()
     private val emailField = JBTextField()
     private val apiTokenField = JBPasswordField()
     private val telegramChatIdField = JBTextField()
@@ -42,6 +39,11 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var ticketsPanelSupplier: (() -> TicketsPanel?)? = null
 
     private val subTabs = JBTabbedPane()
+
+    private companion object {
+        const val HOW_TO_CONFIG_URL = "https://khalibre.atlassian.net/browse/CW-37722?focusedCommentId=103347"
+        const val SOURCE_CODE_URL = "https://github.com/samansum3/kdev-tools"
+    }
 
     private fun cwDir() = ProjectPaths.cwDir(project)
 
@@ -110,80 +112,131 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private fun buildGeneralPanel(): JPanel {
         val outer = JPanel(BorderLayout())
-        outer.border = JBUI.Borders.empty(10, 12)
+        outer.border = JBUI.Borders.empty(12, 12)
 
         val form = JPanel(GridBagLayout())
-        form.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = requestFocusInWindow().let {}
-        })
+
+        fun addSection(row: Int, component: JComponent) {
+            form.add(component, GridBagConstraints().apply {
+                gridx = 0
+                gridy = row
+                weightx = 1.0
+                fill = GridBagConstraints.HORIZONTAL
+                anchor = GridBagConstraints.NORTHWEST
+                insets = JBUI.insetsBottom(12)
+            })
+        }
 
         fun sectionLabel(text: String) = JBLabel(text).apply {
             font = font.deriveFont(Font.BOLD, font.size - 1f)
             foreground = JBUI.CurrentTheme.Label.disabledForeground()
-            border = JBUI.Borders.emptyTop(12)
         }
 
-        fun fieldLabel(text: String) = JBLabel(text).apply {
-            font = font.deriveFont(font.size - 1f)
-            border = JBUI.Borders.emptyTop(6)
+        fun inputBlock(label: String, field: JComponent): JPanel {
+            val p = JPanel(BorderLayout(0, 2)).apply { isOpaque = false }
+            p.add(
+                JBLabel(label).apply { font = font.deriveFont(font.size - 1f) },
+                BorderLayout.NORTH
+            )
+            p.add(field, BorderLayout.CENTER)
+            return p
         }
 
-        fun hint(text: String) = JBLabel(text).apply {
-            font = font.deriveFont(font.size - 2f)
-            foreground = JBUI.CurrentTheme.Label.disabledForeground()
+        fun twoColumnPanel(
+            leftLabel: String,
+            leftField: JComponent,
+            rightLabel: String,
+            rightField: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 2, JBUI.scale(4), 0)).apply {
+                add(inputBlock(leftLabel, leftField))
+                add(inputBlock(rightLabel, rightField))
+            }
         }
 
-        fun fullRow(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 0; gridy = row; gridwidth = 3
-                fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
-                insets = JBUI.insets(0)
-            })
+        fun threeColumnPanel(
+            l1: String,
+            c1: JComponent,
+            l2: String,
+            c2: JComponent,
+            l3: String,
+            c3: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 3, JBUI.scale(4), 0)).apply {
+                add(inputBlock(l1, c1))
+                add(inputBlock(l2, c2))
+                add(inputBlock(l3, c3))
+            }
         }
 
-        fun leftCell(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 0; gridy = row; gridwidth = 1
-                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
-                insets = JBUI.insets(0, 0, 0, 4)
-            })
+        fun oneColumnPanel(
+            label: String,
+            field: JComponent
+        ): JPanel {
+            return JPanel(GridLayout(1, 1, 0, 0)).apply {
+                add(inputBlock(label, field))
+            }
         }
 
-        fun rightCell(row: Int, comp: JComponent) {
-            form.add(comp, GridBagConstraints().apply {
-                gridx = 1; gridy = row; gridwidth = 1
-                fill = GridBagConstraints.HORIZONTAL; weightx = 0.5
-                insets = JBUI.insets(0, 4, 0, 0)
-            })
+        val jiraSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("JIRA"), BorderLayout.NORTH)
+
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+                    add(
+                        threeColumnPanel(
+                            "Base URL", jiraUrlField,
+                            "Project key", projectKeyField,
+                            "Time project key", timeProjectKeyField
+                        )
+                    )
+
+                    add(Box.createVerticalStrut(JBUI.scale(8)))
+
+                    add(
+                        twoColumnPanel(
+                            "Email", emailField,
+                            "API token", apiTokenField
+                        )
+                    )
+                },
+                BorderLayout.CENTER
+            )
         }
 
-        // JIRA
-        fullRow(0, sectionLabel("JIRA"))
-        leftCell(1, fieldLabel("Base URL"))
-        rightCell(1, fieldLabel("Project key"))
-        leftCell(2, jiraUrlField)
-        rightCell(2, projectKeyField)
-        leftCell(3, fieldLabel("Email"))
-        rightCell(3, fieldLabel("API token"))
-        leftCell(4, emailField)
-        rightCell(4, apiTokenField)
+        val telegramSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("TELEGRAM"), BorderLayout.NORTH)
+            add(
+                twoColumnPanel(
+                    "Chat id", telegramChatIdField,
+                    "Bot token", telegramBotTokenField
+                ),
+                BorderLayout.CENTER
+            )
+        }
 
-        // TELEGRAM
-        fullRow(5, sectionLabel("TELEGRAM"))
-        leftCell(6, fieldLabel("Chat id"))
-        rightCell(6, fieldLabel("Bot token"))
-        leftCell(7, telegramChatIdField)
-        rightCell(7, telegramBotTokenField)
+        val calendarificSection = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+            add(sectionLabel("CALENDARIFIC"), BorderLayout.NORTH)
+            add(
+                oneColumnPanel(
+                    "API key",
+                    calendarificApiKeyField
+                ),
+                BorderLayout.CENTER
+            )
+        }
 
-        // CALENDARIFIC
-        fullRow(8, sectionLabel("CALENDARIFIC"))
-        fullRow(9, fieldLabel("API key"))
-        fullRow(10, calendarificApiKeyField)
+        addSection(0, jiraSection)
+        addSection(1, telegramSection)
+        addSection(2, calendarificSection)
 
-        // Spacer
         form.add(JPanel(), GridBagConstraints().apply {
-            gridx = 0; gridy = 14; gridwidth = 3
-            weighty = 1.0; fill = GridBagConstraints.BOTH
+            gridx = 0
+            gridy = 99
+            weighty = 1.0
+            fill = GridBagConstraints.BOTH
         })
 
         val scroll = JBScrollPane(form).apply {
@@ -195,7 +248,12 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val bottom = JPanel(BorderLayout()).apply { border = JBUI.Borders.emptyTop(8) }
         val saveBtn = JButton("Save Config").apply { addActionListener { saveConfig() } }
-        bottom.add(saveBtn, BorderLayout.NORTH)
+
+        // Help links sit directly above the Save Config button
+        val linksAndSave = JPanel(BorderLayout(0, JBUI.scale(8)))
+        linksAndSave.add(buildHelpLinks(), BorderLayout.NORTH)
+        linksAndSave.add(saveBtn, BorderLayout.CENTER)
+        bottom.add(linksAndSave, BorderLayout.NORTH)
         bottom.add(
             JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { add(statusLabel) },
             BorderLayout.SOUTH
@@ -204,12 +262,51 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
         return outer
     }
 
+    // ── Help links ────────────────────────────────────────────────────────────
+
+    private fun buildHelpLinks(): JComponent {
+        fun linkRow(title: String, description: String, url: String): JComponent {
+            val link = ActionLink(title) { BrowserUtil.browse(url) }.apply {
+                toolTipText = url
+            }
+            val desc = JBLabel("<html>$description</html>").apply {
+                foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                font = font.deriveFont(font.size - 1f)
+                setAllowAutoWrapping(true)
+            }
+            return JPanel(BorderLayout(0, JBUI.scale(1))).apply {
+                add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { add(link) }, BorderLayout.NORTH)
+                add(desc, BorderLayout.CENTER)
+            }
+        }
+
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(
+                linkRow(
+                    "How to config",
+                    "This is the original feature definition.",
+                    HOW_TO_CONFIG_URL
+                )
+            )
+            add(Box.createVerticalStrut(JBUI.scale(6)))
+            add(
+                linkRow(
+                    "Source code",
+                    "You can fork it, add new features, or fix bugs if a later IDE version breaks a current plugin feature.",
+                    SOURCE_CODE_URL
+                )
+            )
+        }
+    }
+
     // ── Load / Save ───────────────────────────────────────────────────────────
 
     fun loadConfig() {
         val cfg = DevConfig.load(cwDir())
         jiraUrlField.text = cfg.jira.base_url
         projectKeyField.text = cfg.jira.project_key
+        timeProjectKeyField.text = cfg.jira.time_project_key
         emailField.text = cfg.jira.email
         apiTokenField.text = cfg.jira.api_token
         statusLabel.text = ""
@@ -227,6 +324,7 @@ class ConfigPanel(private val project: Project) : JPanel(BorderLayout()) {
             jira = JiraConfig(
                 base_url = jiraUrlField.text.trim().trimEnd('/'),
                 project_key = projectKeyField.text.trim().uppercase(),
+                time_project_key = timeProjectKeyField.text.trim().uppercase(),
                 email = emailField.text.trim(),
                 api_token = String(apiTokenField.password)
             ),

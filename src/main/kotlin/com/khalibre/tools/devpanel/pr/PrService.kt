@@ -33,7 +33,11 @@ data class PullRequest(
     val url: String,
     var mergeable: MergeableState = MergeableState.UNKNOWN,
     var isOutdated: Boolean = false,
-    var isBlocked: Boolean = false
+    var isBlocked: Boolean = false,
+    // Review threads that are outdated, unresolved, and started by the current user — populated
+    // alongside mergeable/isOutdated/isBlocked in PrPanel.refresh(). Drives the "Resolve
+    // comments" button: shown iff non-empty.
+    var resolvableThreadIds: List<String> = emptyList()
 ) {
     val approvedBy: List<String>
         get() {
@@ -101,35 +105,47 @@ object PrService {
         val cwDir = com.khalibre.tools.devpanel.common.ProjectPaths.cwDir(project)
         val target = targetBranch?.takeIf { it.isNotBlank() } ?: currentBranch
         val onto = ontoBranch?.takeIf { it.isNotBlank() } ?: DevConfig.load(cwDir).git.base_branch
-        val parentBranch = getParentBranch(workDir, target)
-        val rebaseBaseBranch = parentBranch ?: onto
 
         val log = StringBuilder()
 
-        if (currentBranch == target) {
-            log.appendLine("Already on $target.")
+        if (currentBranch != target) {
+            log.appendLine("Checking out $target...")
+            val checkout = runCmd(listOf("git", "checkout", target), workDir)
+            if (checkout.exitCode != 0)
+                return Result.failure(
+                    RuntimeException(
+                        checkout.stderr.ifBlank { checkout.stdout }
+                            .ifBlank { "Failed to checkout $target" }
+                            .take(300)
+                    )
+                )
         } else {
-            log.appendLine("Rebasing $target while staying on $currentBranch.")
+            log.appendLine("Already on $target.")
         }
 
+        log.appendLine("Fetching latest branches...")
+        val fetchAll = runCmd(listOf("git", "fetch", "--all", "--prune"), workDir)
+        if (fetchAll.exitCode != 0) {
+            log.appendLine(
+                "Warning: fetch --all failed (${
+                    fetchAll.stderr.ifBlank { fetchAll.stdout }.take(200)
+                }); parent detection may be based on stale refs."
+            )
+        }
+
+        val parentBranch = CreatePrService.detectParentBranchName(workDir, target, logRef = target)
+        val rebaseBaseBranch = parentBranch ?: onto
         val baseRemote = getRemote(rebaseBaseBranch)
 
-        log.appendLine("Fetching $baseRemote/$rebaseBaseBranch...")
-        val fetch = runCmd(
-            listOf("git", "fetch", baseRemote, rebaseBaseBranch),
-            workDir
-        )
-        if (fetch.exitCode != 0)
-            return Result.failure(RuntimeException(fetch.stderr.ifBlank { "Failed to fetch $baseRemote/$rebaseBaseBranch" }
-                .take(300)))
-
-        log.appendLine("Rebasing $target onto $baseRemote/$rebaseBaseBranch...")
-        val rebaseCmd = if (currentBranch == target) {
-            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch")
+        if (parentBranch != null) {
+            log.appendLine("Found parent branch: $parentBranch")
         } else {
-            listOf("git", "rebase", "$baseRemote/$rebaseBaseBranch", target)
+            log.appendLine("No open parent branch found — using base branch $onto")
         }
-        val pull = runCmd(rebaseCmd, workDir)
+
+        // ── Rebase ───────────────────────────────────────────────────────────
+        log.appendLine("Rebasing $target onto $baseRemote/$rebaseBaseBranch...")
+        val pull = runCmd(listOf("git", "pull", "--rebase", baseRemote, rebaseBaseBranch), workDir)
         if (pull.exitCode != 0)
             return Result.failure(
                 RuntimeException(
@@ -145,9 +161,7 @@ object PrService {
             pushBranch(workDir, targetRemote, target)
         }
 
-        // `git rebase <upstream> <branch>` implicitly checks out <branch> as a side effect
-        // (per git's own docs). When the caller started on a different branch, switch back so
-        // they land where they started rather than on the branch that just got rebased/pushed.
+        // Restore original branch if we switched to check out target above.
         if (currentBranch != target) {
             val restore = runCmd(listOf("git", "checkout", currentBranch), workDir)
             if (restore.exitCode == 0) {
@@ -225,6 +239,17 @@ object PrService {
                         .dropWhile { it.isBlank() }   // matches script's `sed '/./,$!d'`
                         .joinToString("\n")
                     log.appendLine("✔ Dependency removed")
+
+                    val removeLabel = removeDependentLabel(prNumber, workDir)
+                    if (removeLabel.exitCode == 0) {
+                        log.appendLine("✔ Removed Dependent label")
+                    } else {
+                        log.appendLine(
+                            "Note: couldn't remove Dependent label (${
+                                removeLabel.stderr.ifBlank { removeLabel.stdout }.take(200)
+                            })"
+                        )
+                    }
                 } else {
                     log.appendLine("Dependency still active ($state)")
                 }
@@ -239,11 +264,30 @@ object PrService {
             if (parentPrRef != null) {
                 newBody = "### DEPEND ON $parentPrRef\n${newBody.trimStart('\n')}"
                 log.appendLine("✔ Added dependency $parentPrRef")
+
+                if ("Dependent" in existingRepoLabels(workDir)) {
+                    val addLabel =
+                        runCmd(
+                            listOf("gh", "pr", "edit", "$prNumber", "--add-label", "Dependent"),
+                            workDir
+                        )
+                    if (addLabel.exitCode == 0) {
+                        log.appendLine("✔ Added Dependent label")
+                    } else {
+                        log.appendLine(
+                            "Note: couldn't add Dependent label (${
+                                addLabel.stderr.ifBlank { addLabel.stdout }.take(200)
+                            })"
+                        )
+                    }
+                }
             } else {
                 log.appendLine("No parent PR found")
+                removeDependentLabel(prNumber, workDir)
             }
         } else {
             log.appendLine("No dependency found")
+            removeDependentLabel(prNumber, workDir)
         }
 
         // ── 2. Clipboard image handling (single source of truth) ──────────────
@@ -316,6 +360,20 @@ object PrService {
         }
     }
 
+    private fun removeDependentLabel(
+        prNumber: Int,
+        workDir: File
+    ): CmdResult = runCmd(
+        listOf(
+            "gh",
+            "pr",
+            "edit",
+            "$prNumber",
+            "--remove-label",
+            "Dependent"
+        ), workDir
+    )
+
     fun checkoutBranch(project: Project, branch: String): Result<String> {
         val workDir = project.basePath?.let { File(it) }
         val result = runCmd(listOf("git", "checkout", branch), workDir)
@@ -339,7 +397,12 @@ object PrService {
     }
 
     /** Fetch open PRs (non-draft) for an optional base branch */
-    fun fetchPrs(repo: String, baseBranch: String?, author: String?): List<PullRequest> {
+    fun fetchPrs(
+        repo: String,
+        baseBranch: String?,
+        author: String?,
+        closed: Boolean = false
+    ): List<PullRequest> {
         val args = mutableListOf(
             "gh",
             "pr",
@@ -347,7 +410,7 @@ object PrService {
             "--repo",
             repo,
             "--state",
-            "open",
+            if (closed) "closed" else "open",
             "--json",
             "number,title,author,labels,updatedAt,reviewDecision,url,headRefName,baseRefName,isDraft,reviews",
             "--limit",
@@ -412,6 +475,144 @@ object PrService {
         return results
     }
 
+    /** One PR review thread's state, as much as [fetchResolvableThreadIds] needs. [startedBy] is
+     *  the author of the thread's first comment — i.e. whose conversation this is. */
+    private data class ReviewThread(
+        val id: String,
+        val isResolved: Boolean,
+        val isOutdated: Boolean,
+        val startedBy: String?
+    )
+
+    /**
+     * Review threads on a single PR, via GraphQL — `gh pr view`'s REST-backed `--json` fields
+     * don't expose `isResolved`/`isOutdated` at the thread level, only the older-style flat
+     * review comments, so this goes straight to the GraphQL API.
+     */
+    private fun fetchReviewThreads(owner: String, name: String, prNumber: Int): List<ReviewThread> {
+        val query = """
+            query(${'$'}owner: String!, ${'$'}name: String!, ${'$'}number: Int!) {
+              repository(owner: ${'$'}owner, name: ${'$'}name) {
+                pullRequest(number: ${'$'}number) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      id
+                      isResolved
+                      isOutdated
+                      comments(first: 1) {
+                        nodes { author { login } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val result = runCmd(
+            listOf(
+                "gh", "api", "graphql",
+                "-f", "query=$query",
+                "-F", "owner=$owner",
+                "-F", "name=$name",
+                "-F", "number=$prNumber"
+            )
+        )
+        if (result.exitCode != 0 || result.stdout.isBlank()) return emptyList()
+
+        return try {
+            val nodes = JsonParser.parseString(result.stdout).asJsonObject
+                .getAsJsonObject("data")
+                .getAsJsonObject("repository")
+                .getAsJsonObject("pullRequest")
+                .getAsJsonObject("reviewThreads")
+                .getAsJsonArray("nodes")
+            nodes.mapNotNull { n ->
+                val obj = n.asJsonObject
+                val id = obj.get("id")?.asString ?: return@mapNotNull null
+                val isResolved = obj.get("isResolved")?.asBoolean ?: false
+                val isOutdated = obj.get("isOutdated")?.asBoolean ?: false
+                val startedBy = obj.getAsJsonObject("comments")
+                    ?.getAsJsonArray("nodes")
+                    ?.firstOrNull()?.asJsonObject
+                    ?.getAsJsonObject("author")?.get("login")?.asString
+                ReviewThread(id, isResolved, isOutdated, startedBy)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * For each PR in [numbers], the ids of review threads that are outdated, unresolved, and
+     * were started by [currentUser] — the set the "Resolve comments" button offers to clear.
+     * Fetched in parallel per PR, same pattern as [fetchMergeableStates].
+     */
+    fun fetchResolvableThreadIds(
+        repo: String,
+        numbers: List<Int>,
+        currentUser: String
+    ): Map<Int, List<String>> {
+        if (numbers.isEmpty() || currentUser.isBlank()) return emptyMap()
+        val parts = repo.split("/", limit = 2)
+        if (parts.size != 2) return emptyMap()
+        val (owner, name) = parts
+
+        val results = ConcurrentHashMap<Int, List<String>>()
+        val latch = CountDownLatch(numbers.size)
+        numbers.forEach { num ->
+            Thread {
+                try {
+                    val threads = fetchReviewThreads(owner, name, num)
+                    results[num] = threads
+                        .filter { !it.isResolved && it.isOutdated && it.startedBy == currentUser }
+                        .map { it.id }
+                } catch (e: Exception) {
+                    results[num] = emptyList()
+                } finally {
+                    latch.countDown()
+                }
+            }.start()
+        }
+        latch.await(30, TimeUnit.SECONDS)
+        return results
+    }
+
+    /** Resolves each of [threadIds] via the `resolveReviewThread` GraphQL mutation, returning how
+     *  many succeeded. Partial failures don't fail the whole call — only reported as a failure if
+     *  every single one errored out (e.g. `gh` itself unavailable). */
+    fun resolveReviewThreads(threadIds: List<String>): Result<Int> {
+        if (threadIds.isEmpty()) return Result.success(0)
+        val mutation = """
+            mutation(${'$'}threadId: ID!) {
+              resolveReviewThread(input: {threadId: ${'$'}threadId}) {
+                thread { id isResolved }
+              }
+            }
+        """.trimIndent()
+
+        var resolved = 0
+        var lastError: String? = null
+        threadIds.forEach { id ->
+            val result = runCmd(
+                listOf(
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    "query=$mutation",
+                    "-f",
+                    "threadId=$id"
+                )
+            )
+            if (result.exitCode == 0) resolved++
+            else lastError = result.stderr.ifBlank { result.stdout }.take(200)
+        }
+
+        return if (resolved == 0 && lastError != null) Result.failure(RuntimeException(lastError))
+        else Result.success(resolved)
+    }
+
     /** gh pr review <number> --approve */
     fun approvePr(repo: String, number: Int): Result<String> {
         val result = runCmd(listOf("gh", "pr", "review", "$number", "--approve", "--repo", repo))
@@ -437,6 +638,19 @@ object PrService {
         return result.stdout.trim().takeIf { it.isNotBlank() && result.exitCode == 0 }
     }
 
+    fun existingRepoLabels(workDir: File): Set<String> {
+        val result =
+            runCmd(listOf("gh", "label", "list", "--json", "name", "--limit", "200"), workDir)
+        if (result.exitCode != 0 || result.stdout.isBlank()) return emptySet()
+        return try {
+            JsonParser.parseString(result.stdout).asJsonArray
+                .mapNotNull { it.asJsonObject.get("name")?.asString }
+                .toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
     fun pushBranch(workDir: File, remote: String, targetBranch: String): Result<String> {
         val result = runCmd(
             listOf(
@@ -454,32 +668,6 @@ object PrService {
                 result.stderr.ifBlank { result.stdout }.ifBlank { "git push failed" }.take(300)
             )
         )
-    }
-
-    private fun getParentBranch(
-        workDir: File,
-        branchName: String
-    ): String? {
-        val parentPr = CreatePrService.detectParentPrRef(workDir, branchName, logRef = branchName)
-            ?.removePrefix("#")
-            ?: return null
-
-        val result = runCmd(
-            listOf(
-                "gh",
-                "pr",
-                "view",
-                parentPr,
-                "--json",
-                "headRefName",
-                "--jq",
-                ".headRefName"
-            ),
-            workDir
-        )
-
-        return result.stdout.trim()
-            .takeIf { result.exitCode == 0 && it.isNotBlank() }
     }
 
     internal fun getRemote(branchName: String): String {

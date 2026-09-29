@@ -6,6 +6,7 @@ import com.intellij.openapi.ui.popup.Balloon
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.awt.RelativePoint
 import com.intellij.util.ui.JBUI
+import com.khalibre.tools.devpanel.common.CardUtils.makeTransitionButton
 import com.khalibre.tools.devpanel.pr.PrService
 import com.khalibre.tools.devpanel.tickets.JiraAuth
 import java.awt.*
@@ -15,12 +16,7 @@ import java.awt.event.MouseEvent
 import java.io.File
 import java.net.HttpURLConnection
 import javax.imageio.ImageIO
-import javax.swing.Icon
-import javax.swing.ImageIcon
-import javax.swing.JButton
-import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.Timer
+import javax.swing.*
 import javax.swing.border.CompoundBorder
 
 object CardUtils {
@@ -32,20 +28,30 @@ object CardUtils {
     /**
      * Shows an HTML status balloon anchored to [anchor] — used for action results (create PR,
      * rebase, etc.) where you want a transient "✓/✗ ..." popup rather than a persistent status label.
+     * [onClosed], if given, fires once the balloon goes away (fadeout or otherwise) — e.g. to roll
+     * back an optimistic UI update after the user has had a chance to read the failure.
      */
     fun showResultBalloon(
         html: String,
         anchor: Component,
         type: MessageType,
-        listener: ((javax.swing.event.HyperlinkEvent) -> Unit)? = null
+        listener: ((javax.swing.event.HyperlinkEvent) -> Unit)? = null,
+        onClosed: (() -> Unit)? = null
     ) {
-        JBPopupFactory.getInstance()
+        val balloon = JBPopupFactory.getInstance()
             .createHtmlTextBalloonBuilder(html, type, listener?.let { l ->
                 javax.swing.event.HyperlinkListener { e -> l(e) }
             })
             .setFadeoutTime(7000)
             .createBalloon()
-            .show(RelativePoint(anchor, Point(anchor.width / 2, 0)), Balloon.Position.above)
+        if (onClosed != null) {
+            balloon.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
+                override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
+                    onClosed()
+                }
+            })
+        }
+        balloon.show(RelativePoint(anchor, Point(anchor.width / 2, 0)), Balloon.Position.above)
     }
 
     /**
@@ -118,8 +124,10 @@ object CardUtils {
         var frame = 0
 
         fun applyFrame(icon: Icon) {
-            if (isTransitionButton) button.putClientProperty("cw.spinnerIcon", icon) else button.icon =
-                icon
+            if (isTransitionButton)
+                button.putClientProperty("cw.spinnerIcon", icon)
+            else
+                button.icon = icon
             button.repaint()
         }
 
@@ -130,8 +138,10 @@ object CardUtils {
 
         return {
             timer.stop()
-            if (isTransitionButton) button.putClientProperty("cw.spinnerIcon", null) else button.icon =
-                originalIcon
+            if (isTransitionButton)
+                button.putClientProperty("cw.spinnerIcon", null)
+            else
+                button.icon = originalIcon
             button.isEnabled = true
             button.repaint()
         }

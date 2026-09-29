@@ -184,7 +184,11 @@ object JiraService {
     /** Overwrites [ticketKey]'s description with [descriptionAdf] via REST PUT — used to patch in
      *  the final description (with real `media` references) after uploading embedded images,
      *  since they can't be uploaded until the ticket — and its numeric id — exist. */
-    fun updateDescription(ticketKey: String, descriptionAdf: JsonObject, cwDir: File? = null): Result<Unit> {
+    fun updateDescription(
+        ticketKey: String,
+        descriptionAdf: JsonObject,
+        cwDir: File? = null
+    ): Result<Unit> {
         val cfg = DevConfig.load(cwDir)
         val baseUrl = cfg.jira.base_url.trimEnd('/')
         if (baseUrl.isBlank()) return Result.failure(RuntimeException("Jira base URL not configured"))
@@ -392,15 +396,18 @@ object JiraService {
         return transitionToInProgress(ticketKey)
     }
 
-    fun currentUserEmail(cwDir: File?): String? = DevConfig.load(cwDir).jira.email.takeIf { it.isNotBlank() }
+    fun currentUserEmail(cwDir: File?): String? =
+        DevConfig.load(cwDir).jira.email.takeIf { it.isNotBlank() }
 
-    /**
-     * `acli jira workitem view <key> --fields summary --json` — same call the `create-pr`
-     * shell script makes to build the "TICKET-123: <summary>" PR title.
-     */
-    fun fetchTicketSummary(ticketKey: String): Result<String> {
+    /** Ticket data needed to build a PR: title text and (for the "Bug" tag) issue type. */
+    data class TicketDetails(val summary: String, val issueType: String?)
+
+    fun fetchTicketDetails(ticketKey: String): Result<TicketDetails> {
         val result = PrService.runCmd(
-            listOf("acli", "jira", "workitem", "view", ticketKey, "--fields", "summary", "--json")
+            listOf(
+                "acli", "jira", "workitem", "view", ticketKey,
+                "--fields", "summary,issuetype", "--json"
+            )
         )
         if (result.exitCode != 0 || result.stdout.isBlank())
             return Result.failure(
@@ -412,12 +419,14 @@ object JiraService {
             val root = JsonParser.parseString(result.stdout)
             val item =
                 if (root.isJsonArray) root.asJsonArray.first().asJsonObject else root.asJsonObject
-            val summary = item.getAsJsonObject("fields").get("summary").asString.trim()
+            val fields = item.getAsJsonObject("fields")
+            val summary = fields.get("summary")?.asString?.trim().orEmpty()
             if (summary.isBlank())
-                Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
-            else Result.success(summary)
+                return Result.failure(RuntimeException("Jira ticket '$ticketKey' returned an empty summary."))
+            val issueType = fields.getAsJsonObject("issuetype")?.get("name")?.asString
+            Result.success(TicketDetails(summary, issueType))
         } catch (e: Exception) {
-            Result.failure(RuntimeException("Failed to parse summary from acli output."))
+            Result.failure(RuntimeException("Failed to parse ticket details from acli output."))
         }
     }
 

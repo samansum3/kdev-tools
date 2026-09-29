@@ -41,6 +41,11 @@ class PrPanel(
     private var savedAuthor: String? = null
     private var hasSavedAuthorPref = false
 
+    // "Closed" toggle — filters between open (default) and closed PRs. Unlike base/author there's
+    // no "unset vs deliberately none" ambiguity to track: a boolean's absence-from-disk default
+    // (false → show open PRs) already matches the required default, so no separate has-saved flag.
+    private var closedFilter = false
+
     // The most recent full fetch (server-filtered by whatever base/author was selected at the
     // time). Used to render an instant, locally-filtered preview the moment the user changes
     // base/author again — before the authoritative re-fetch for the new filter comes back.
@@ -101,6 +106,8 @@ class PrPanel(
             hasSavedAuthorPref = true
             savedAuthor = authorFile.readText().trim().takeIf { it.isNotBlank() }
         }
+        val closedFile = java.io.File(dir, "closed-filter")
+        if (closedFile.exists()) closedFilter = closedFile.readText().trim() == "true"
     }
 
     /**
@@ -119,6 +126,8 @@ class PrPanel(
         val author = authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
         java.io.File(dir, "author").writeText(author ?: "")
         hasSavedAuthorPref = true; savedAuthor = author
+
+        java.io.File(dir, "closed-filter").writeText(if (closedFilter) "true" else "false")
     }
 
     private fun buildUi() {
@@ -185,6 +194,10 @@ class PrPanel(
         syncButton.addActionListener { fetchUpstreamAndReload() }
         authorSyncButton.addActionListener { syncAuthors() }
 
+        val closedToggle = makeToggleBadge("Closed", closedFilter) { active ->
+            onClosedToggleChanged(active)
+        }.apply { toolTipText = "Show closed PRs instead of open ones" }
+
         val branchRow = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS); isOpaque = false
             add(JBLabel("base:").apply { font = font.deriveFont(font.size - 1f) })
@@ -194,6 +207,7 @@ class PrPanel(
             add(JBLabel("author:").apply { font = font.deriveFont(font.size - 1f) })
             add(Box.createHorizontalStrut(4)); add(authorCombo)
             add(Box.createHorizontalStrut(4)); add(authorSyncButton)
+            add(Box.createHorizontalStrut(10)); add(closedToggle)
             addMouseListener(object : java.awt.event.MouseAdapter() {
                 override fun mouseClicked(e: java.awt.event.MouseEvent) {
                     requestFocusInWindow()
@@ -415,6 +429,19 @@ class PrPanel(
     }
 
     /**
+     * Called when the Closed toggle flips. Unlike [onFilterChanged], this skips the local preview
+     * step — [lastLoadedPrs] was fetched under the *other* state (open vs closed), so filtering it
+     * client-side would just show a stale, wrong-state list rather than a useful instant preview.
+     * The old cards stay on screen (same as any other in-flight refresh) until the authoritative
+     * re-fetch replaces them.
+     */
+    private fun onClosedToggleChanged(closed: Boolean) {
+        closedFilter = closed
+        saveTabState()
+        refresh()
+    }
+
+    /**
      * Renders an immediate, client-side-filtered view of the last full fetch using the
      * *current* combo selections — gives instant feedback while the authoritative re-fetch
      * for the new filter is still in flight. Falls back to doing nothing if we have no cache
@@ -435,7 +462,7 @@ class PrPanel(
     private fun renderPrList(prs: List<PullRequest>, repo: String, selectedBranch: String?) {
         cardsPanel.removeAll()
         if (prs.isEmpty()) {
-            cardsPanel.add(JBLabel("No open PRs found").apply {
+            cardsPanel.add(JBLabel(if (closedFilter) "No closed PRs found" else "No open PRs found").apply {
                 border = JBUI.Borders.empty(16, 4)
                 foreground = JBUI.CurrentTheme.Label.disabledForeground()
             })
@@ -483,13 +510,21 @@ class PrPanel(
                     baseBranchCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
                 val selectedAuthor =
                     authorCombo.selectedItem?.toString()?.takeIf { it != "— none —" }
-                val prs = PrService.fetchPrs(repo, selectedBranch, selectedAuthor)
+                val prs = PrService.fetchPrs(repo, selectedBranch, selectedAuthor, closedFilter)
                 val mergeableMap = PrService.fetchMergeableStates(repo, prs.map { it.number })
+                // "Resolve comments" only makes sense on open PRs, and needs to know whose
+                // threads to look for.
+                val resolvableMap = if (!closedFilter && !ghUser.isNullOrBlank()) {
+                    PrService.fetchResolvableThreadIds(repo, prs.map { it.number }, ghUser!!)
+                } else {
+                    emptyMap()
+                }
                 prs.forEach {
                     val info = mergeableMap[it.number]
                     it.mergeable = info?.mergeable ?: MergeableState.UNKNOWN
                     it.isOutdated = info?.isOutdated ?: false
                     it.isBlocked = info?.isBlocked ?: false
+                    it.resolvableThreadIds = resolvableMap[it.number] ?: emptyList()
                 }
                 SwingUtilities.invokeLater {
                     lastLoadedPrs = prs
@@ -512,7 +547,11 @@ class PrPanel(
 
     private fun buildSummaryText(branch: String?, total: Int, awaiting: Int): String {
         val branchPart = if (branch != null) " → $branch" else ""
-        return "Open PRs$branchPart: $total  ·  awaiting review: $awaiting"
+        return if (closedFilter) {
+            "Closed PRs$branchPart: $total"
+        } else {
+            "Open PRs$branchPart: $total  ·  awaiting review: $awaiting"
+        }
     }
 
     private fun buildPrCard(pr: PullRequest, repo: String, hasMergePermission: Boolean): JPanel {
@@ -644,20 +683,26 @@ class PrPanel(
                         toolTipText = "Checkout this PR branch"
                     }
                 add(checkoutBtn)
-                val rebaseButton = makeActionButton("Rebase") {}.apply {
-                    toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
+
+                if (!closedFilter) {
+                    val rebaseButton = makeActionButton("Rebase") {}.apply {
+                        toolTipText = "Checkout this PR branch and rebase it from ${pr.baseRefName}"
+                    }
+                    rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
+                    add(rebaseButton)
+
+                    val updatePrButton = makeActionButton("Update PR") { }.apply {
+                        toolTipText =
+                            "Update PR description, remove dependency text, add image, etc."
+                    }
+                    updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
+                    add(updatePrButton)
                 }
-                rebaseButton.addActionListener { doRebase(pr, rebaseButton) }
-                add(rebaseButton)
-                val updatePrButton = makeActionButton("Update PR") { }.apply {
-                    toolTipText = "Update PR description, remove dependency text, add image, etc."
-                }
-                updatePrButton.addActionListener { doUpdatePr(pr, updatePrButton) }
-                add(updatePrButton)
-            } else {
+            } else if (!closedFilter) {
                 lateinit var approveBtn: JButton
                 approveBtn = makeActionButton("Approve") { doApprovePr(pr, repo, approveBtn) }
                 add(approveBtn)
+
                 if (hasMergePermission) {
                     lateinit var approveMergeBtn: JButton
                     approveMergeBtn =
@@ -674,13 +719,25 @@ class PrPanel(
                 }
             }
 
-            if (hasMergePermission) {
+            if (hasMergePermission && !closedFilter) {
                 lateinit var mergeBtn: JButton
                 mergeBtn =
                     makeActionButton("Merge") { doMergePr(pr, repo, false, mergeBtn) }.apply {
                         toolTipText = "Merge this PR into ${pr.baseRefName}"
                     }
                 add(mergeBtn)
+            }
+
+            if (!closedFilter && pr.resolvableThreadIds.isNotEmpty()) {
+                lateinit var resolveBtn: JButton
+                resolveBtn =
+                    makeActionButton("💬 Resolve (${pr.resolvableThreadIds.size})") {
+                        doResolveComments(pr, resolveBtn)
+                    }.apply {
+                        toolTipText =
+                            "Resolve your own review comments that are now outdated (${pr.resolvableThreadIds.size})"
+                    }
+                add(resolveBtn)
             }
         }
         gbc.gridy = 3; card.add(actionPanel, gbc)
@@ -805,6 +862,34 @@ class PrPanel(
         }
     }
 
+    private fun doResolveComments(pr: PullRequest, button: JButton) {
+        button.text = "Resolving"
+        val stopSpinner = CardUtils.startButtonSpinner(button)
+        val threadIds = pr.resolvableThreadIds
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = PrService.resolveReviewThreads(threadIds)
+            SwingUtilities.invokeLater {
+                stopSpinner()
+                button.text = "💬 Resolve";
+
+                result.onSuccess { resolvedCount ->
+                    CardUtils.showResultBalloon(
+                        "✓ Resolved $resolvedCount comment${if (resolvedCount == 1) "" else "s"}",
+                        button,
+                        MessageType.INFO
+                    )
+                }.onFailure {
+                    CardUtils.showResultBalloon(
+                        "✗ ${CardUtils.escHtml(it.message ?: "Failed to resolve comments")}",
+                        button,
+                        MessageType.ERROR
+                    )
+                }
+                refresh()
+            }
+        }
+    }
+
     private fun setStatus(text: String) {
         statusLabel.text = text
     }
@@ -852,6 +937,57 @@ class PrPanel(
         val luminance = (0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue) / 255
         val fg = if (luminance > 0.5) Color(0x1F2328) else Color.WHITE
         return BadgeUtils.makeBadge(name, bg, fg)
+    }
+
+    private fun makeToggleBadge(
+        text: String,
+        initiallyActive: Boolean,
+        onChange: (Boolean) -> Unit
+    ): JLabel {
+        val label = JLabel(text)
+        label.font = label.font.deriveFont(label.font.size - 2f)
+        label.isOpaque = true
+        label.putClientProperty("active", initiallyActive)
+        label.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        applyToggleBadgeStyle(label)
+        label.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                val nowActive = label.getClientProperty("active") != true
+                label.putClientProperty("active", nowActive)
+                applyToggleBadgeStyle(label); label.repaint()
+                onChange(nowActive)
+            }
+
+            override fun mouseEntered(e: java.awt.event.MouseEvent) {
+                label.putClientProperty("hovered", true); applyToggleBadgeStyle(label)
+            }
+
+            override fun mouseExited(e: java.awt.event.MouseEvent) {
+                label.putClientProperty("hovered", false); applyToggleBadgeStyle(label)
+            }
+        })
+        return label
+    }
+
+    private fun applyToggleBadgeStyle(label: JLabel) {
+        val active = label.getClientProperty("active") == true
+        val hovered = label.getClientProperty("hovered") == true
+        when {
+            active -> {
+                label.background = Color(163, 45, 45); label.foreground = Color.WHITE
+                label.border = JBUI.Borders.empty(3, 8)
+            }
+
+            hovered -> {
+                label.background = Color(252, 235, 235); label.foreground = Color(163, 45, 45)
+                label.border = JBUI.Borders.empty(3, 8)
+            }
+
+            else -> {
+                label.background = Color(225, 223, 218); label.foreground = Color(100, 98, 93)
+                label.border = JBUI.Borders.empty(3, 8)
+            }
+        }
     }
 
     private fun makeActionButton(text: String, action: () -> Unit) =

@@ -3,6 +3,8 @@ package com.khalibre.tools.devpanel.pr
 import com.intellij.openapi.project.Project
 import com.khalibre.tools.devpanel.config.DevConfig
 import com.khalibre.tools.devpanel.pr.CreatePrService.collectExtraTicketKeys
+import com.khalibre.tools.devpanel.pr.CreatePrService.collectOwnCommitHashes
+import com.khalibre.tools.devpanel.pr.CreatePrService.tagsFromChangedFiles
 import com.khalibre.tools.devpanel.tickets.JiraService
 import java.io.File
 
@@ -72,9 +74,10 @@ object CreatePrService {
         var ticketKey = branch.replace(TRAILING_NUMBER_SUFFIX_RE, "")
         if (!CANONICAL_KEY_RE.matches(ticketKey)) ticketKey = branch
 
-        // ── Jira summary ─────────────────────────────────────────────────
-        val summary =
-            JiraService.fetchTicketSummary(ticketKey).getOrElse { return Result.failure(it) }
+        // ── Jira ticket details (summary + issue type, one request) ──────
+        val ticketDetails =
+            JiraService.fetchTicketDetails(ticketKey).getOrElse { return Result.failure(it) }
+        val summary = ticketDetails.summary
 
         // ── Parent branch / parent PR ───────────────────────────────────
         val parentPrRef = detectParentPrRef(workDir, branch)
@@ -111,6 +114,9 @@ object CreatePrService {
         val ghArgs = mutableListOf("gh", "pr", "create", "--title", prTitle, "--body", prBody)
         if (draft) ghArgs += "--draft"
         if (!baseBranch.isNullOrBlank()) ghArgs += listOf("--base", baseBranch)
+
+        val prTags = computePrTags(workDir, branch, ticketDetails.issueType, parentPrRef)
+        if (prTags.isNotEmpty()) ghArgs += listOf("--label", prTags.joinToString(","))
 
         val defaultReviewers = DevConfig.load(cwDir).git.default_reviewers
         if (defaultReviewers.isNotEmpty()) {
@@ -201,20 +207,22 @@ object CreatePrService {
 
     /**
      * Walks [logRef]'s own `--first-parent` history (excluding its own tip commit) one commit at
-     * a time, same boundary rules as [collectExtraTicketKeys]:
+     * a time, looking for the nearest real stacking boundary:
      *
      *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? If it has an open PR,
-     *    that's the parent to report. If it doesn't (a stale/never-opened branch ref), keep
-     *    walking past it and check the next branch tip encountered.
+     *    that's the parent branch — return its name. If it doesn't (a stale/never-opened branch
+     *    ref), keep walking past it and check the next branch tip encountered.
      *  - Hits the tip of any other branch (e.g. "dev-wf-s9", a base/integration branch) — stop
      *    immediately with no parent: this branch isn't stacked on anything, it's just based
      *    directly on the base branch.
      *
      * [logRef] should be the branch actually being inspected — not necessarily `HEAD`, since the
      * caller (e.g. rebasing a branch other than the one currently checked out) may be inspecting
-     * a branch that isn't checked out at all.
+     * a branch that isn't checked out at all. Relies entirely on local git state (commit ancestry
+     * + local/remote-tracking refs) plus one `gh` call to check PR existence — nothing is read
+     * from any PR's body/description.
      */
-    internal fun detectParentPrRef(
+    internal fun detectParentBranchName(
         workDir: File,
         currentBranch: String,
         logRef: String = "HEAD"
@@ -233,35 +241,38 @@ object CreatePrService {
             val namesHere = tipMap[hash] ?: continue
             for (name in namesHere) {
                 if (!TICKET_KEY_RE.matches(name)) return null // base/integration branch — no parent.
-                val num = getOpenPrNumber(workDir, name)
-                if (num != null) return "#$num" // stacked on a real, already-open PR.
+                if (hasOpenPr(workDir, name)) return name // stacked on a real, already-open PR.
                 // No PR yet: not a real boundary — keep walking past it.
             }
         }
         return null
     }
 
+    /** Same walk as [detectParentBranchName], but returns the parent's PR number (for building
+     *  the "### DEPEND ON #N" line) instead of the branch name. */
+    internal fun detectParentPrRef(
+        workDir: File,
+        currentBranch: String,
+        logRef: String = "HEAD"
+    ): String? {
+        val branchName = detectParentBranchName(workDir, currentBranch, logRef) ?: return null
+        val num = getOpenPrNumber(workDir, branchName) ?: return null
+        return "#$num"
+    }
+
     /**
-     * Scans this branch's own commit messages — walking `--first-parent` from HEAD — for Jira
-     * ticket links, one per line (matching the commit-message convention of a bare
-     * `.../browse/KEY` line per referenced ticket). Checked one commit at a time:
+     * Walks HEAD's `--first-parent` history and returns just the commit hashes that belong to
+     * this branch's own work, applying the same boundary rule used elsewhere in this file:
      *
-     *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? Check whether it has an
-     *    open PR. If it does, that's a real stacking boundary — stop there. If it doesn't (a
-     *    stale/never-opened branch ref), its commits are effectively folded into *this* PR, so
-     *    keep walking past it and repeat the same check at the next branch tip encountered.
+     *  - Hits the tip of another ticket-shaped branch (e.g. "CW-100")? If it has an open PR,
+     *    that's a real stacking boundary — stop there. If it doesn't (a stale/never-opened
+     *    branch ref), its commits are effectively folded into *this* PR, so keep walking past it.
      *  - Hits the tip of any other branch (e.g. "dev-wf-s9", a base/integration branch) — stop
      *    immediately, no PR check needed.
      *
-     * Returns the distinct keys found other than [ticketKey] itself, oldest commit first, so a PR
-     * that folds in work from another ticket gets a title like "CW-100, CW-101: summary" instead
-     * of just "CW-100".
+     * Returned newest-first, matching `git log`'s natural order.
      */
-    private fun collectExtraTicketKeys(
-        workDir: File,
-        branch: String,
-        ticketKey: String
-    ): List<String> {
+    private fun collectOwnCommitHashes(workDir: File, branch: String): List<String> {
         val tipMap = buildBranchTipMap(workDir, branch)
 
         val logResult =
@@ -272,8 +283,6 @@ object CreatePrService {
         if (logResult.exitCode != 0) return emptyList()
 
         val prCheckCache = mutableMapOf<String, Boolean>()
-
-        // Walk newest -> oldest, stopping at whichever branch tip qualifies as a boundary first.
         val ownHashes = mutableListOf<String>()
         outer@ for (hash in logResult.stdout.lines().filter { it.isNotBlank() }) {
             val namesHere = tipMap[hash]
@@ -289,6 +298,79 @@ object CreatePrService {
             }
             ownHashes += hash
         }
+        return ownHashes
+    }
+
+    /**
+     * File paths touched across this branch's own commits (same boundary rules as
+     * [collectOwnCommitHashes]) — used to infer PR tags from the kinds of files changed (see
+     * [tagsFromChangedFiles]). A single `git diff --name-only` between the parent of the oldest
+     * own commit and HEAD, rather than per-commit diffs, since [collectOwnCommitHashes] returns a
+     * contiguous `--first-parent` range.
+     */
+    private fun collectChangedFiles(workDir: File, branch: String): List<String> {
+        val ownHashes = collectOwnCommitHashes(workDir, branch)
+        if (ownHashes.isEmpty()) return emptyList()
+        val oldest = ownHashes.last()
+
+        val parentResult = PrService.runCmd(listOf("git", "rev-parse", "$oldest^"), workDir)
+        val diffResult = if (parentResult.exitCode == 0) {
+            PrService.runCmd(
+                listOf("git", "diff", "--name-only", parentResult.stdout.trim(), "HEAD"),
+                workDir
+            )
+        } else {
+            // Oldest own commit is the repo root commit (no parent) — diff its tree directly.
+            PrService.runCmd(
+                listOf("git", "show", "--name-only", "--pretty=format:", oldest),
+                workDir
+            )
+        }
+        if (diffResult.exitCode != 0) return emptyList()
+        return diffResult.stdout.lines().map { it.trim() }.filter { it.isNotBlank() }
+    }
+
+    private fun tagsFromChangedFiles(files: List<String>): List<String> {
+        fun hasExt(vararg exts: String) = files.any { f -> exts.any { f.endsWith(".$it") } }
+        val tags = mutableListOf<String>()
+        if (hasExt("java", "kt")) tags += "BE"
+        if (hasExt("ts", "js", "tsx")) tags += "FE"
+        if (hasExt("vue", "css", "scss", "html", "jsp", "jspf")) tags += "UI"
+        return tags
+    }
+
+    private fun computePrTags(
+        workDir: File,
+        branch: String,
+        mainTicketIssueType: String?,
+        parentPrRef: String?
+    ): List<String> {
+        val fileTags = tagsFromChangedFiles(collectChangedFiles(workDir, branch))
+        val bugTag = mainTicketIssueType
+            ?.takeIf {
+                it.equals("Bug", ignoreCase = true) || it.equals("Defect", ignoreCase = true)
+            }
+            ?.let { "Bug" }
+        val dependentTag = if (parentPrRef != null) "Dependent" else null
+
+        val allTags = (fileTags + listOfNotNull(bugTag, dependentTag)).distinct()
+        val availableLabels = PrService.existingRepoLabels(workDir)
+        return allTags.filter { it in availableLabels }
+    }
+
+    /**
+     * Extracts Jira ticket keys referenced by [ticketKey]'s own commits (one per commit-message
+     * line, matching the `.../browse/KEY` convention), scanning the same commit range as
+     * [collectOwnCommitHashes]. Returns the distinct keys found other than [ticketKey] itself,
+     * oldest commit first, so a PR that folds in work from another ticket gets a title like
+     * "CW-100, CW-101: summary" instead of just "CW-100".
+     */
+    private fun collectExtraTicketKeys(
+        workDir: File,
+        branch: String,
+        ticketKey: String
+    ): List<String> {
+        val ownHashes = collectOwnCommitHashes(workDir, branch)
         if (ownHashes.isEmpty()) return emptyList()
 
         // Re-walk oldest -> newest so extra keys come out in the order the work happened.

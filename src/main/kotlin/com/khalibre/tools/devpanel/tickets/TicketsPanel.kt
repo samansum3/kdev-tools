@@ -19,7 +19,7 @@ import javax.imageio.ImageIO
 import javax.swing.*
 
 class TicketsPanel(
-    private val project: Project,
+    val project: Project,
     private val tabId: String,
     private val onLoadingChanged: (Boolean) -> Unit = {}
 ) : JPanel(BorderLayout()) {
@@ -762,7 +762,12 @@ class TicketsPanel(
         val isEligibleType = devTypes.isEmpty() || ticket.issueType in devTypes
         val compactMode = DevConfig.load(cw).ticket.itemMode == "compact"
 
-        panel.add(CardUtils.makeActionButton("View") { JiraService.openTicketInBrowser(ticket.key, cw) })
+        panel.add(CardUtils.makeActionButton("View") {
+            JiraService.openTicketInBrowser(
+                ticket.key,
+                cw
+            )
+        })
 
         // Compact mode moves transitions into the status-badge dropdown (see
         // buildStatusDropdownTrigger) and frees up the room a row of transition buttons
